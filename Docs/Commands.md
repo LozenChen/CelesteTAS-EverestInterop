@@ -135,6 +135,9 @@
   # Ensure that you are currently in the chapter 2
   Assert EndWith 2-OldSite {Session.Area.SID}
   ```
+### RequireDependency
+- `RequireDependency, StrawberryJam2021, 1.0.9`
+- Check if the dependency is loaded. If not, the game will goto the mod options menu.
 
 ### StunPause and EndStunPause
 - ```
