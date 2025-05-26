@@ -34,8 +34,10 @@ public sealed class Editor : SkiaDrawable {
         set {
             if (document != null) {
                 document.TextChanged -= HandleTextChanged;
+                document.FixupPatch -= HandleFixupPatch;
 
                 if (Settings.Instance.AutoSave) {
+                    FormatLines(Enumerable.Range(0, document.Lines.Count).ToArray());
                     FixInvalidInputs();
                     document.Save();
                 }
@@ -54,6 +56,7 @@ public sealed class Editor : SkiaDrawable {
 
             // Ensure everything is still valid when something has changed
             document.TextChanged += HandleTextChanged;
+            document.FixupPatch += HandleFixupPatch;
 
             // Reset various state
             ActivePopupMenu = null;
@@ -90,16 +93,13 @@ public sealed class Editor : SkiaDrawable {
                 }
             }
 
-            // Apply auto-collapses
+            // Ensure everything is in a valid state
             Recalc();
 
             return;
 
             void HandleTextChanged(Document _, Dictionary<int, string> insertions, Dictionary<int, string> deletions) {
                 lastModification = DateTime.UtcNow;
-
-                FormatLines(insertions.Keys);
-                FixInvalidInputs();
 
                 // Adjust total frame count
                 foreach (string deletion in deletions.Values) {
@@ -120,6 +120,15 @@ public sealed class Editor : SkiaDrawable {
                 ScrollCaretIntoView();
 
                 TextChanged(document, insertions, deletions);
+            }
+            Document.Patch? HandleFixupPatch(Document _, Dictionary<int, string> insertions, Dictionary<int, string> deletions) {
+                var fixup = Document.Update(raiseEvents: false);
+
+                FormatLines(insertions.Keys);
+                FixInvalidInputs();
+
+                fixup.Discard(); // We don't want to part of the regular undo stack
+                return fixup.Patches.Count > 0 ? fixup.Patches.Aggregate(Document.Patch.Merge) : null;
             }
         }
     }
@@ -512,7 +521,7 @@ public sealed class Editor : SkiaDrawable {
         MenuItem CreateCommandInsert(CommandInfo info) {
             var cmd = new Command { Shortcut = Keys.None };
             cmd.Executed += (_, _) => {
-                InsertQuickEdit(info.Insert);
+                InsertQuickEdit(info.Insert.Replace(CommandInfo.Separator, Settings.Instance.CommandSeparatorText));
                 Recalc();
                 ScrollCaretIntoView();
             };
@@ -2262,7 +2271,16 @@ public sealed class Editor : SkiaDrawable {
         }
         // Manually handle breakpoints
         else if (FastForwardLine.TryParse(Document.Lines[Document.Caret.Row], out var fastForward)) {
-            if (char.ToUpper(typedCharacter) == 'S') {
+            if (typedCharacter == '!') {
+                fastForward.ForceStop = !fastForward.ForceStop;
+                if (fastForward.ForceStop) {
+                    Document.Caret.Col++;
+                } else {
+                    Document.Caret.Col--;
+                }
+
+                Document.ReplaceLine(Document.Caret.Row, fastForward.ToString());
+            } else if (char.ToUpper(typedCharacter) == 'S') {
                 fastForward.SaveState = !fastForward.SaveState;
                 if (fastForward.SaveState) {
                     Document.Caret.Col++;

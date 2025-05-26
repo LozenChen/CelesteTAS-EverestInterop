@@ -4,7 +4,9 @@ using System.IO;
 using System.Linq;
 using Celeste.Mod;
 using JetBrains.Annotations;
+using Monocle;
 using StudioCommunication;
+using TAS.Entities;
 using TAS.Input.Commands;
 using TAS.Module;
 using TAS.Utils;
@@ -37,9 +39,9 @@ public class InputController {
     public readonly SortedDictionary<int, FastForward> FastForwards = new();
     public readonly SortedDictionary<int, FastForward> FastForwardLabels = new();
 
-    public InputFrame? Previous => Inputs!.GetValueOrDefault(CurrentFrameInTas - 1);
-    public InputFrame? Current => Inputs!.GetValueOrDefault(CurrentFrameInTas);
-    public InputFrame? Next => Inputs!.GetValueOrDefault(CurrentFrameInTas + 1);
+    public InputFrame? Previous => Inputs.GetValueOrDefault(CurrentFrameInTas - 1);
+    public InputFrame? Current => Inputs.GetValueOrDefault(CurrentFrameInTas);
+    public InputFrame? Next => Inputs.GetValueOrDefault(CurrentFrameInTas + 1);
 
     public int CurrentFrameInTas { get; set; } = 0;
     public int CurrentFrameInInput { get; set; } = 0;
@@ -48,7 +50,8 @@ public class InputController {
     public List<Command> CurrentCommands => Commands.GetValueOrDefault(CurrentFrameInTas) ?? [];
     public List<Comment> CurrentComments => Comments.GetValueOrDefault(CurrentFrameInTas) ?? [];
 
-    public FastForward? CurrentFastForward => NextLabelFastForward ??
+    public FastForward? CurrentFastForward => FastForwards.FirstOrDefault(entry => entry.Key > CurrentFrameInTas && entry.Value.ForceStop).Value ??
+                                              NextLabelFastForward ??
                                               FastForwards.FirstOrDefault(pair => pair.Key > CurrentFrameInTas).Value ??
                                               FastForwards.LastOrDefault().Value;
     public bool HasFastForward => CurrentFastForward is { } forward && forward.Frame > CurrentFrameInTas;
@@ -71,7 +74,7 @@ public class InputController {
     public bool CanPlayback => CurrentFrameInTas < Inputs.Count;
 
     /// Whether the TAS should be paused on this frame
-    public bool Break => CurrentFastForward?.Frame == CurrentFrameInTas;
+    public bool Break => CurrentFastForward?.Frame == CurrentFrameInTas || FastForwards.Any(entry => entry.Key == CurrentFrameInTas && entry.Value.ForceStop);
 
     private static readonly string DefaultFilePath = Path.Combine(Everest.PathEverest, "Celeste.tas");
 
@@ -169,16 +172,39 @@ public class InputController {
             }
         }
 
+        // Validate that room labels are correct, to catch desyncs and ensure they're not accidentally messed up
+        // Check comments of previous frame, since during the first frame of a transition, the room name won't be updated yet
+        // However semantically, it is perfectly valid to do so, from a TAS perspective
+        foreach (var comment in Comments.GetValueOrDefault(CurrentFrameInTas - 1) ?? []) {
+            if (CommentLine.RoomLabelRegex.Match($"#{comment.Text}") is { Success: true } match) {
+                if (Engine.Scene.GetSession() is { } session) {
+                    if (match.Groups[1].ValueSpan.SequenceEqual(session.Level)) {
+                        continue;
+                    }
+
+                    Toast.ShowAndLog($"""
+                                      {comment.FilePath} line {comment.FileLine}:
+                                      Room label 'lvl_{match.Groups[1].ValueSpan}' does not match actual name 'lvl_{session.Level}'
+                                      """);
+                } else {
+                    Toast.ShowAndLog($"""
+                                      {comment.FilePath} line {comment.FileLine}:
+                                      Found room label '#{comment.Text}' outside of level
+                                      """);
+                }
+            }
+        }
+
         if (!CanPlayback) {
             return;
         }
 
         ExportGameInfo.ExportInfo();
         StunPauseCommand.UpdateSimulateSkipInput();
-        InputHelper.FeedInputs(Current);
+        InputHelper.FeedInputs(Current!);
 
         // Increment if it's still the same input
-        if (CurrentFrameInInput == 0 || Current.StudioLine == Previous!.StudioLine && Current.RepeatIndex == Previous.RepeatIndex && Current.FrameOffset == Previous.FrameOffset) {
+        if (CurrentFrameInInput == 0 || Current!.StudioLine == Previous!.StudioLine && Current.RepeatIndex == Previous.RepeatIndex && Current.FrameOffset == Previous.FrameOffset) {
             CurrentFrameInInput++;
         } else {
             CurrentFrameInInput = 1;
@@ -224,7 +250,7 @@ public class InputController {
 
         // Add a hidden label at the of the text block
         if (path == FilePath) {
-            FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, "", studioLine);
+            FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine);
         }
     }
 
@@ -246,8 +272,8 @@ public class InputController {
                 // It needs to stop reading the current file when it's done to prevent recursion
                 return false;
             }
-        } else if (lineText.StartsWith("***")) {
-            var fastForward = new FastForward(CurrentParsingFrame, lineText.Substring("***".Length), studioLine);
+        } else if (FastForwardLine.TryParse(lineText, out var fastForwardLine)) {
+            var fastForward = new FastForward(CurrentParsingFrame, studioLine, fastForwardLine);
             if (FastForwards.TryGetValue(CurrentParsingFrame, out var oldFastForward) && oldFastForward.SaveState && !fastForward.SaveState) {
                 // ignore
             } else {
@@ -255,7 +281,7 @@ public class InputController {
             }
         } else if (lineText.StartsWith("#")) {
             if (CommentLine.IsLabel(lineText)) {
-                FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, "", studioLine);
+                FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine);
             }
 
             if (!Comments.TryGetValue(CurrentParsingFrame, out var comments)) {

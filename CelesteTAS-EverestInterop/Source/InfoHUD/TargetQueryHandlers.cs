@@ -21,7 +21,7 @@ namespace TAS.InfoHUD;
 internal class SettingsQueryHandler : TargetQuery.Handler {
     public override bool CanResolveInstances(Type type) => type == typeof(Settings);
 
-    public override (List<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
+    public override (HashSet<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
         // Vanilla settings don't need a prefix
         if (typeof(Settings).GetAllFieldInfos().FirstOrDefault(f => f.Name == queryArgs[0]) != null) {
             return ([typeof(Settings)], queryArgs);
@@ -80,7 +80,7 @@ internal class SettingsQueryHandler : TargetQuery.Handler {
 internal class SaveDataQueryHandler : TargetQuery.Handler {
     public override bool CanResolveInstances(Type type) => type == typeof(SaveData);
 
-    public override (List<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
+    public override (HashSet<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
         // Vanilla settings don't need a prefix
         if (typeof(SaveData).GetAllFieldInfos().FirstOrDefault(f => f.Name == queryArgs[0]) != null) {
             return ([typeof(SaveData)], queryArgs);
@@ -102,7 +102,7 @@ internal class SaveDataQueryHandler : TargetQuery.Handler {
                 saveData.VariantMode = (bool) value!;
                 saveData.AssistMode = false;
                 if (!saveData.VariantMode) {
-                    AssistsQueryHandler.ApplyAssists(Assists.Default);
+                    AssistsQueryHandler.ApplyAssists(null, Assists.Default);
                 }
                 break;
 
@@ -110,7 +110,7 @@ internal class SaveDataQueryHandler : TargetQuery.Handler {
                 saveData.AssistMode = (bool) value!;
                 saveData.VariantMode = false;
                 if (!saveData.AssistMode) {
-                    AssistsQueryHandler.ApplyAssists(Assists.Default);
+                    AssistsQueryHandler.ApplyAssists(null, Assists.Default);
                 }
                 break;
         }
@@ -137,7 +137,7 @@ internal class SaveDataQueryHandler : TargetQuery.Handler {
 internal class AssistsQueryHandler : TargetQuery.Handler {
     public override bool CanResolveInstances(Type type) => type == typeof(Assists);
 
-    public override (List<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
+    public override (HashSet<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
         // Vanilla settings don't need a prefix
         if (typeof(Assists).GetFields().FirstOrDefault(f => f.Name == queryArgs[0]) != null) {
             return ([typeof(SaveData)], [nameof(SaveData.Assists), ..queryArgs]);
@@ -152,8 +152,9 @@ internal class AssistsQueryHandler : TargetQuery.Handler {
     public override Result<bool, TargetQuery.MemberAccessError> SetMember(object? instance, object? value, Type type, int memberIdx, string[] memberArgs, bool forceAllowCodeExecution) {
         switch (instance) {
             case SaveData saveData when memberArgs[memberIdx] == nameof(SaveData.Assists):
+                var oldAssists = saveData.Assists;
                 saveData.Assists = (Assists) value!;
-                ApplyAssists(saveData.Assists);
+                ApplyAssists(oldAssists, saveData.Assists);
                 return Result<bool, TargetQuery.MemberAccessError>.Ok(true);
 
             case Assists when memberArgs[memberIdx] == nameof(Assists.Invincible) && Manager.Running && TasSettings.BetterInvincible:
@@ -178,26 +179,34 @@ internal class AssistsQueryHandler : TargetQuery.Handler {
         }
     }
 
-    public static void ApplyAssists(Assists assists) {
-        Engine.TimeRateB = assists.GameSpeed / 10.0f;
-        Celeste.Input.Feather.InvertedX = Celeste.Input.Aim.InvertedX = Celeste.Input.MoveX.Inverted = assists.MirrorMode;
+    public static void ApplyAssists(Assists? oldAssists, Assists newAssists) {
+        if (oldAssists?.MirrorMode != newAssists.MirrorMode) {
+            Engine.TimeRateB = newAssists.GameSpeed / 10.0f;
+        }
+        if (oldAssists?.MirrorMode != newAssists.MirrorMode) {
+            Celeste.Input.Feather.InvertedX = Celeste.Input.Aim.InvertedX = Celeste.Input.MoveX.Inverted = newAssists.MirrorMode;
+        }
 
         if (Engine.Scene.GetPlayer() is { } player) {
-            var mode = assists.PlayAsBadeline
-                ? PlayerSpriteMode.MadelineAsBadeline
-                : player.DefaultSpriteMode;
+            if (oldAssists?.PlayAsBadeline != newAssists.PlayAsBadeline) {
+                var mode = newAssists.PlayAsBadeline
+                    ? PlayerSpriteMode.MadelineAsBadeline
+                    : player.DefaultSpriteMode;
 
-            // player.Sprite is captured in IntroWakeUpCoroutine(),
-            // so resetting the sprite would cause the player to be stuck in StIntroWakeUp
-            if (player.StateMachine.State != Player.StIntroWakeUp) {
-                if (player.Active) {
-                    player.ResetSpriteNextFrame(mode);
-                } else {
-                    player.ResetSprite(mode);
+                // player.Sprite is captured in IntroWakeUpCoroutine(),
+                // so resetting the sprite would cause the player to be stuck in StIntroWakeUp
+                if (player.StateMachine.State != Player.StIntroWakeUp) {
+                    if (player.Active) {
+                        player.ResetSpriteNextFrame(mode);
+                    } else {
+                        player.ResetSprite(mode);
+                    }
                 }
             }
 
-            player.Dashes = Math.Min(player.Dashes, player.MaxDashes);
+            if (oldAssists?.DashMode != newAssists.DashMode) {
+                player.Dashes = Math.Min(player.Dashes, player.MaxDashes);
+            }
         }
     }
 }
@@ -288,7 +297,7 @@ internal class ExtendedVariantsQueryHandler : TargetQuery.Handler {
 internal class EverestModuleSettingsQueryHandler : TargetQuery.Handler {
     public override bool CanResolveInstances(Type type) => type.IsSameOrSubclassOf(typeof(EverestModuleSettings));
 
-    public override (List<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
+    public override (HashSet<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
         if (Everest.Modules.FirstOrDefault(mod => mod.SettingsType != null && mod.Metadata.Name == queryArgs[0]) is { } module) {
             return ([module.SettingsType], queryArgs[1..]);
         }
@@ -356,8 +365,6 @@ internal class SessionQueryHandler : TargetQuery.Handler {
 }
 
 internal class EntityQueryHandler : TargetQuery.Handler {
-    internal record Data(List<Type> ComponentTypes, EntityID? EntityID);
-
     /// Holds a position with integer and fractional part separated
     internal struct SubpixelPosition(SubpixelComponent x, SubpixelComponent y) {
         public SubpixelComponent X = x;
@@ -409,7 +416,7 @@ internal class EntityQueryHandler : TargetQuery.Handler {
     public override bool CanResolveValue(Type type) => type == typeof(SubpixelComponent) || type == typeof(SubpixelPosition);
     public override bool CanEnumerateMemberEntries(Type type, TargetQuery.Variant variant) => type == typeof(SubpixelPosition);
 
-    public override (List<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
+    public override (HashSet<Type> Types, string[] MemberArgs)? ResolveBaseTypes(string[] queryArgs) {
         // Both special cases use colons, so check for them to early-exit
         if (queryArgs.All(arg => !arg.Contains(':'))) {
             return null;
