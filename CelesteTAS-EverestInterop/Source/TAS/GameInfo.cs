@@ -199,7 +199,7 @@ public static class GameInfo {
     private static void LevelOnUpdate(On.Celeste.Level.orig_Update orig, Level self) {
         orig(self);
 
-        if (TransitionFrames > 0) {
+        if (TransitionFrames > 0 && TransitionFrames != int.MaxValue) {
             TransitionFrames--;
         }
     }
@@ -221,7 +221,10 @@ public static class GameInfo {
             }
         }
 
-        result += level.NextTransitionDuration.ToCeilingFrames() + 1;
+        if (level.NextTransitionDuration.ToCeilingFrames() is var transitionDuration && transitionDuration == int.MaxValue) {
+            return int.MaxValue;
+        }
+        result += transitionDuration + 1;
 
         return result;
     }
@@ -277,7 +280,7 @@ public static class GameInfo {
 
                 int dashCooldown = player.dashCooldownTimer.ToFloorFrames();
 
-                PlayerSeeker? playerSeeker = level.Tracker.GetEntity<PlayerSeeker>();
+                PlayerSeeker? playerSeeker = level.Tracker.GetEntityTrackIfNeeded<PlayerSeeker>();
                 if (playerSeeker != null) {
                     pos = GetAdjustedPos(playerSeeker, out exactPos);
                     speed = GetAdjustedSpeed(playerSeeker.speed, out exactSpeed);
@@ -307,22 +310,22 @@ public static class GameInfo {
                     if (collectTimer <= 0.15f) {
                         int collectFrames = (0.15f - collectTimer).ToCeilingFrames();
                         if (collectTimer >= 0f) {
-                            timers += $"Berry({collectFrames}) ";
+                            timers += $"Berry({collectFrames.FormatFrames()}) ";
                         } else {
                             int additionalFrames = Math.Abs(collectTimer).ToCeilingFrames();
-                            timers += $"Berry({collectFrames - additionalFrames}+{additionalFrames}) ";
+                            timers += $"Berry({collectFrames - additionalFrames}+{additionalFrames.FormatFrames()}) ";
                         }
                     }
                 }
 
                 if (dashCooldown > 0) {
-                    timers += $"DashCD({dashCooldown}) ";
+                    timers += $"DashCD({dashCooldown.FormatFrames()}) ";
                 }
 
                 if ((FramesPerGameSecond != 60 || SaveData.Instance.Assists.SuperDashing || ExtendedVariantsInterop.SuperDashing) &&
                     DashTime.ToCeilingFrames() >= 1 && player.StateMachine.State == Player.StDash) {
                     DashTime = player.StateMachine.currentCoroutine.waitTimer;
-                    timers += $"Dash({DashTime.ToCeilingFrames()}) ";
+                    timers += $"Dash({DashTime.ToCeilingFrames().FormatFrames()}) ";
                 }
 
                 if (player.StateMachine.State != Player.StDash) {
@@ -442,14 +445,14 @@ public static class GameInfo {
     public static string GetStatuses(Level level, Player player) {
         List<string> statuses = new();
 
-        string noControlFrames = TransitionFrames > 0 ? $"({TransitionFrames})" : string.Empty;
+        string noControlFrames = TransitionFrames > 0 ? $"({TransitionFrames.FormatFrames()})" : string.Empty;
         float unpauseTimer = LevelUnpauseTimer?.Invoke(level) ?? 0f;
         if (unpauseTimer > 0f) {
             noControlFrames = $"({(int) Math.Ceiling(unpauseTimer / Engine.RawDeltaTime)})";
         }
 
         if (Engine.FreezeTimer > 0f) {
-            statuses.Add($"Frozen({Engine.FreezeTimer.ToCeilingFrames()})");
+            statuses.Add($"Frozen({(int) Math.Ceiling(Engine.FreezeTimer / Engine.RawDeltaTime)})");
         }
 
         if (player.InControl && !level.Transitioning && unpauseTimer <= 0f) {
@@ -458,11 +461,11 @@ public static class GameInfo {
             }
 
             if (player.jumpGraceTimer.ToFloorFrames() is var coyote and > 0) {
-                statuses.Add($"Coyote({coyote})");
+                statuses.Add($"Coyote({coyote.FormatFrames()})");
             }
 
             if (player.varJumpTimer.ToFloorFrames() is var jumpTimer and > 0) {
-                statuses.Add($"Jump({jumpTimer})");
+                statuses.Add($"Jump({jumpTimer.FormatFrames()})");
             }
 
             if (player.StateMachine.State == Player.StNormal && (player.Speed.Y > 0f || player.Holding is {SlowFall: true})) {
@@ -475,7 +478,7 @@ public static class GameInfo {
                     < 0 => "L",
                     0 => "N",
                 };
-                statuses.Add($"ForceMove{direction}({forceMoveXTimer})");
+                statuses.Add($"ForceMove{direction}({forceMoveXTimer.FormatFrames()})");
             }
         } else {
             statuses.Add($"NoControl{noControlFrames}");
@@ -540,16 +543,16 @@ public static class GameInfo {
         return builder.ToString();
     }
 
-    private static int ToCeilingFrames(this float seconds) {
-        return (int) Math.Ceiling(seconds / Engine.RawDeltaTime / Engine.TimeRateB);
+    internal static int ToCeilingFrames(this float timer) {
+        float frames = MathF.Ceiling(timer / Engine.DeltaTime);
+        return float.IsInfinity(frames) || float.IsNaN(frames) ? int.MaxValue : (int) frames;
     }
-
-    public static int ToFloorFrames(this float seconds) {
-        return (int) Math.Floor(seconds / Engine.RawDeltaTime / Engine.TimeRateB);
+    public static int ToFloorFrames(this float timer) {
+        float frames = MathF.Floor(timer / Engine.DeltaTime);
+        return float.IsInfinity(frames) || float.IsNaN(frames) ? int.MaxValue : (int) frames;
     }
-
-    public static int ConvertToFrames(float seconds) {
-        return seconds.ToCeilingFrames();
+    internal static string FormatFrames(this int frames) {
+        return frames == int.MaxValue ? "\u221e" : frames.ToString();
     }
 
     private static string GetAdjustedPos(Actor actor, out string exactPos) {
@@ -607,8 +610,8 @@ public static class GameInfo {
         if (player.wallSpeedRetentionTimer > 0f) {
             int timer = player.wallSpeedRetentionTimer.ToCeilingFrames();
             float retainedSpeed = ConvertSpeedUnit(player.wallSpeedRetained, TasSettings.SpeedUnit);
-            exactRetainedSpeed = $"Retained({timer}): {retainedSpeed.ToString($"F{GameSettings.MaxDecimals}")}";
-            return $"Retained({timer}): {retainedSpeed.ToString($"F{TasSettings.SpeedDecimals}")}";
+            exactRetainedSpeed = $"Retained({timer.FormatFrames()}): {retainedSpeed.ToString($"F{GameSettings.MaxDecimals}")}";
+            return $"Retained({timer.FormatFrames()}): {retainedSpeed.ToString($"F{TasSettings.SpeedDecimals}")}";
         } else {
             return exactRetainedSpeed = string.Empty;
         }
@@ -618,8 +621,8 @@ public static class GameInfo {
         if (player.LiftBoost is var liftBoost && liftBoost != Vector2.Zero) {
             liftBoost = ConvertSpeedUnit(liftBoost, TasSettings.SpeedUnit);
             int timer = player.liftSpeedTimer.ToCeilingFrames();
-            exactLiftBoost = $"LiftBoost({timer}): {liftBoost.ToSimpleString(GameSettings.MaxDecimals)}";
-            return $"LiftBoost({timer}): {liftBoost.ToSimpleString(TasSettings.SpeedDecimals)}";
+            exactLiftBoost = $"LiftBoost({timer.FormatFrames()}): {liftBoost.ToSimpleString(GameSettings.MaxDecimals)}";
+            return $"LiftBoost({timer.FormatFrames()}): {liftBoost.ToSimpleString(TasSettings.SpeedDecimals)}";
         } else {
             return exactLiftBoost = string.Empty;
         }

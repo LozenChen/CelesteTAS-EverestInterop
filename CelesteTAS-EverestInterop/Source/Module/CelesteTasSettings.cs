@@ -125,6 +125,10 @@ public class CelesteTasSettings : EverestModuleSettings {
     [DefaultButtonBinding([0], [Keys.OemOpenBrackets])]
     public ButtonBinding KeyFrameAdvance { get; set; } = null!;
 
+    [SettingName("TAS_KEY_FRAME_STEP_BACK")]
+    [DefaultButtonBinding([0], [Keys.LeftControl, Keys.OemOpenBrackets])]
+    public ButtonBinding KeyFrameStepBack { get; set; } = null!;
+
     [SettingName("TAS_KEY_PAUSE_RESUME")]
     [DefaultButtonBinding([0], [Keys.OemCloseBrackets])]
     public ButtonBinding KeyPause { get; set; } = null!;
@@ -496,7 +500,8 @@ public class CelesteTasSettings : EverestModuleSettings {
         set => _BetterInvincible = value;
     }
 
-    public EnableCondition ForceAllowAccessibilityTools = EnableCondition.WhileStudioConnected;
+    public StudioEnableCondition ForceAllowAccessibilityTools = StudioEnableCondition.WhileStudioConnected;
+    public GameplayEnableCondition PreventSkinModGameplayChanges = GameplayEnableCondition.DuringTAS;
 
     public bool HideFreezeFrames { get; set; } = false;
     public bool IgnoreGcCollect { get; set; } = true;

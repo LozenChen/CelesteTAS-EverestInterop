@@ -89,6 +89,9 @@ internal static class SyncChecker {
         result.WriteToFile(resultFile);
 
         if (fileQueue.TryDequeue(out string? file)) {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
             // Add to action queue, since we're still in DisableRun and can't start the next one immediately
             Manager.AddMainThreadAction(() => CheckFile(file));
         } else {
@@ -250,14 +253,17 @@ internal static class SyncChecker {
 
     [ParseFileEnd]
     private static void ParseFileEnd() {
-        if (Active) {
-            if (Manager.Controller.Inputs.Count == 0) {
-                ReportRunFinished();
-                return;
-            }
-
-            // Insert breakpoint at the end
-            Manager.Controller.FastForwards[Manager.Controller.Inputs.Count] = new FastForward(Manager.Controller.Inputs.Count, Manager.Controller.Inputs[^1].StudioLine);
+        if (!Active) {
+            return;
         }
+
+        var controller = Manager.Controller;
+        if (controller.Inputs.Count == 0) {
+            ReportRunFinished();
+            return;
+        }
+
+        // Insert breakpoint at the end
+        controller.FastForwards[controller.Inputs.Count] = new FastForward(controller.Inputs.Count, StudioLine: 0, FilePath: string.Empty, FileLine: 0);
     }
 }

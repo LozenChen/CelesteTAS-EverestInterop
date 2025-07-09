@@ -15,20 +15,21 @@ using TAS.Input;
 using TAS.Input.Commands;
 using TAS.ModInterop;
 using TAS.Module;
+using TAS.Playback;
 using TAS.Tools;
 using TAS.Utils;
 
 namespace TAS;
 
 [AttributeUsage(AttributeTargets.Method), MeansImplicitUse]
-public class EnableRunAttribute : Attribute;
+public class EnableRunAttribute(int priority = 0) : EventAttribute(priority);
 
 [AttributeUsage(AttributeTargets.Method), MeansImplicitUse]
-public class DisableRunAttribute : Attribute;
+public class DisableRunAttribute(int priority = 0) : EventAttribute(priority);
 
 /// Causes the method to be called every real-time frame, even if a TAS is currently running / paused
 [AttributeUsage(AttributeTargets.Method), MeansImplicitUse]
-public class UpdateMetaAttribute : Attribute;
+public class UpdateMetaAttribute(int priority = 0) : EventAttribute(priority);
 
 /// Main controller, which manages how the TAS is played back
 public static class Manager {
@@ -61,6 +62,16 @@ public static class Manager {
 
     private static readonly ConcurrentQueue<Action> mainThreadActions = new();
 
+    private static PopupToast.Entry? frameStepEofToast = null;
+    private static PopupToast.Entry? autoPauseDraft = null;
+
+    // Allow accumulation of frames to step back, since the operation is time intensive
+    internal static int FrameStepBackTargetFrame = -1;
+    private const float FrameStepBackTime = 1.0f;
+    private static float frameStepBackAmount = 0.0f;
+    private static float frameStepBackTimeout = 0.0f;
+    private static PopupToast.Entry? frameStepBackToast = null;
+
 #if DEBUG
     // Hot-reloading support
     [Load]
@@ -81,6 +92,7 @@ public static class Manager {
                 // Only disable TAS for non-silent reload actions
                 cursor.EmitBrtrue(start);
                 cursor.EmitDelegate(DisableRun);
+                cursor.EmitDelegate(SavestateManager.ClearAllSavestates); // Clean-up savestates
             });
     }
 
@@ -101,6 +113,8 @@ public static class Manager {
         CurrState = NextState = State.Running;
         PlaybackSpeed = 1.0f;
 
+        FrameStepBackTargetFrame = -1;
+
         Controller.Stop();
         Controller.RefreshInputs();
 
@@ -113,9 +127,6 @@ public static class Manager {
 
         AttributeUtils.Invoke<EnableRunAttribute>();
 
-        // This needs to happen after EnableRun, otherwise the input state will be reset in BindingHelper.SetTasBindings
-        Savestates.EnableRun();
-
         $"Starting TAS: {Controller.FilePath}".Log();
     }
 
@@ -127,6 +138,7 @@ public static class Manager {
         "Stopping TAS".Log();
 
         AttributeUtils.Invoke<DisableRunAttribute>();
+
         SyncChecker.ReportRunFinished();
         CurrState = NextState = State.Disabled;
         Controller.Stop();
@@ -146,13 +158,13 @@ public static class Manager {
             DisableRun();
         }
 
+        SavestateManager.Update();
+
         CurrState = NextState;
 
         while (mainThreadActions.TryDequeue(out var action)) {
             action.Invoke();
         }
-
-        Savestates.Update();
 
         if (!Running || CurrState == State.Paused || IsLoading()) {
             return;
@@ -165,7 +177,7 @@ public static class Manager {
             return;
         }
 
-        if (Controller.HasFastForward) {
+        if (Controller.HasFastForward || FrameStepBackTargetFrame > 0) {
             NextState = State.Running;
         }
 
@@ -176,13 +188,29 @@ public static class Manager {
             return;
         }
 
-        // Auto-pause at end of drafts
-        if (!Controller.CanPlayback && TasSettings.AutoPauseDraft && IsDraft()) {
+        // Catch frame step-back
+        if (FrameStepBackTargetFrame > 0 && Controller.CurrentFrameInTas >= FrameStepBackTargetFrame) {
+            FrameStepBackTargetFrame = -1;
             NextState = State.Paused;
+        }
+        // Auto-pause at end of drafts
+        else if (!Controller.CanPlayback && TasSettings.AutoPauseDraft && IsDraft()) {
+            NextState = State.Paused;
+
+            if (CurrState == State.Running && !FastForwarding) {
+                const string text = "Auto-pause draft on end:\nInsert any Time command or disable the setting to prevent the pausing";
+                const float duration = 2.0f;
+                if (autoPauseDraft is not { Active: true }) {
+                    autoPauseDraft = PopupToast.Show(text, duration);
+                } else {
+                    autoPauseDraft.Text = text;
+                    autoPauseDraft.Timeout = duration;
+                }
+            }
         }
         // Pause the TAS if breakpoint is hit
         // Special-case for end of regular files, to update *Time-commands
-        else if (Controller.Break && (Controller.CanPlayback || IsDraft())) {
+        else if (FrameStepBackTargetFrame == -1 && Controller.Break && (Controller.CanPlayback || IsDraft())) {
             Controller.NextLabelFastForward = null;
             NextState = State.Paused;
         }
@@ -195,7 +223,7 @@ public static class Manager {
                 DisableRun();
             }
             // Disallow modifying options
-            else if (Engine.Scene is Level level && level.Tracker.GetEntity<TextMenu>() is { } menu) {
+            else if (Engine.Scene is Level level && level.Tracker.GetEntityTrackIfNeeded<TextMenu>() is { } menu) {
                 var item = menu.Items.FirstOrDefault();
 
                 if (item is TextMenu.Header { Title: { } title }
@@ -217,7 +245,7 @@ public static class Manager {
         }
 
         Hotkeys.UpdateMeta();
-        Savestates.UpdateMeta();
+        SavestateManager.UpdateMeta();
         AttributeUtils.Invoke<UpdateMetaAttribute>();
 
         SendStudioState();
@@ -243,11 +271,6 @@ public static class Manager {
             return;
         }
 
-        if (Running && Hotkeys.FastForwardComment.Pressed) {
-            Controller.FastForwardToNextLabel();
-            return;
-        }
-
         if (TASRecorderInterop.IsRecording) {
             // Force recording at 1x playback
             NextState = State.Running;
@@ -255,10 +278,44 @@ public static class Manager {
             return;
         }
 
+        if (frameStepBackAmount > 0.0f) {
+            int frames = (int) Math.Round(frameStepBackAmount / Core.PlaybackDeltaTime);
+            frameStepBackTimeout -= Core.PlaybackDeltaTime;
+
+            // Advance a frame extra, since otherwise 0s would only be rendered AFTER the lag from the TAS restart
+            string text = $"Frame Step Back: -{frames}f   (in {Math.Max(0.0f, frameStepBackTimeout - Core.PlaybackDeltaTime):F2}s)";
+            if (frameStepBackToast is not { Active: true }) {
+                frameStepBackToast = PopupToast.Show(text);
+            } else {
+                frameStepBackToast.Text = text;
+            }
+            frameStepBackToast.Timeout = frameStepBackTimeout;
+
+            if (frameStepBackTimeout <= 0.0f) {
+                FrameStepBackTargetFrame = Math.Max(1, Controller.CurrentFrameInTas - frames);
+
+                Controller.Stop();
+                CurrState = NextState = State.Running;
+                AttributeUtils.Invoke<EnableRunAttribute>();
+
+                frameStepBackTimeout = 0.0f;
+                frameStepBackAmount = 0.0f;
+            }
+        }
+
+        if (Running && Hotkeys.FastForwardComment.Pressed) {
+            Controller.FastForwardToNextLabel();
+            return;
+        }
+
         switch (CurrState) {
             case State.Running:
                 if (Hotkeys.PauseResume.Pressed || Hotkeys.FrameAdvance.Pressed) {
                     NextState = State.Paused;
+                } else if (Hotkeys.FrameStepBack.Pressed) {
+                    NextState = State.Paused;
+                    frameStepBackTimeout = FrameStepBackTime;
+                    frameStepBackAmount = Core.PlaybackDeltaTime;
                 }
                 break;
 
@@ -267,7 +324,22 @@ public static class Manager {
                 break;
 
             case State.Paused:
-                if (Hotkeys.PauseResume.Pressed) {
+                if (frameStepBackAmount > 0.0f) {
+                    if (Hotkeys.FrameStepBack.Repeated) {
+                        frameStepBackTimeout = FrameStepBackTime;
+                        frameStepBackAmount += Core.PlaybackDeltaTime;
+                    } else if (Hotkeys.FastForward.Check) {
+                        // Fast-forward during pause plays at 0.5x speed (due to alternating advancing / pausing)
+                        frameStepBackTimeout = FrameStepBackTime;
+                        frameStepBackAmount += Core.PlaybackDeltaTime * 2.0f;
+                    } else if (Hotkeys.SlowForward.Check) {
+                        frameStepBackTimeout = FrameStepBackTime;
+                        frameStepBackAmount += TasSettings.SlowForwardSpeed;
+                    }
+                } else if (Hotkeys.FrameStepBack.Repeated) {
+                    frameStepBackTimeout = FrameStepBackTime;
+                    frameStepBackAmount = Core.PlaybackDeltaTime;
+                } else if (Hotkeys.PauseResume.Pressed) {
                     NextState = State.Running;
                 } else if (Hotkeys.FrameAdvance.Repeated || Hotkeys.FastForward.Check) {
                     // Prevent frame-advancing into the end of the TAS
@@ -277,7 +349,14 @@ public static class Manager {
                     if (Controller.CanPlayback) {
                         NextState = State.FrameAdvance;
                     } else {
-                        // TODO: Display toast "Reached end-of-file". Currently not possible due to them not being updated
+                        const string text = "Cannot advance further: Reached end-of-file";
+                        const float duration = 1.0f;
+                        if (frameStepEofToast is not { Active: true }) {
+                            frameStepEofToast = PopupToast.Show(text, duration);
+                        } else {
+                            frameStepEofToast.Text = text;
+                            frameStepEofToast.Timeout = duration;
+                        }
                     }
                 }
                 break;
@@ -296,6 +375,9 @@ public static class Manager {
 
         // Apply fast / slow forwarding
         switch (NextState) {
+            case State.Running when FrameStepBackTargetFrame != -1:
+                PlaybackSpeed = FastForward.DefaultSpeed;
+                break;
             case State.Running when Hotkeys.FastForward.Check:
                 PlaybackSpeed = TasSettings.FastForwardSpeed;
                 break;
@@ -303,7 +385,7 @@ public static class Manager {
                 PlaybackSpeed = TasSettings.SlowForwardSpeed;
                 break;
 
-            case State.Paused or State.SlowForward when Hotkeys.SlowForward.Check:
+            case State.Paused or State.SlowForward when Hotkeys.SlowForward.Check && frameStepBackAmount <= 0.0f:
                 PlaybackSpeed = TasSettings.SlowForwardSpeed;
                 NextState = State.SlowForward;
                 break;
@@ -342,7 +424,7 @@ public static class Manager {
 
     /// Whether the game is currently truly loading, i.e. waiting an undefined amount of time
     public static bool IsActuallyLoading() {
-        if (Controller.Inputs!.GetValueOrDefault(Controller.CurrentFrameInTas) is { } current && current.ParentCommand is { } command && command.Is("SaveAndQuitReenter")) {
+        if (Controller.Inputs.GetValueOrDefault(Controller.CurrentFrameInTas) is { } current && current.ParentCommand is { } command && command.Is("SaveAndQuitReenter")) {
             // SaveAndQuitReenter manually adds the optimal S&Q real-time
             return true;
         }
@@ -382,7 +464,7 @@ public static class Manager {
             CurrentLine = previous?.StudioLine ?? -1,
             CurrentLineSuffix = $"{Controller.CurrentFrameInInput + (previous?.FrameOffset ?? 0)}{previous?.RepeatString ?? ""}",
             CurrentFrameInTas = Controller.CurrentFrameInTas,
-            SaveStateLine = Savestates.StudioHighlightLine,
+            SaveStateLines = SavestateManager.AllSavestates.Select(state => state.StudioLine).ToArray(),
             PlaybackRunning = CurrState == State.Running,
 
             FileNeedsReload = Controller.NeedsReload,

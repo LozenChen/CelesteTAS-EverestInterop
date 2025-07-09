@@ -28,11 +28,12 @@ public class CelesteTasModule : EverestModule {
 
     public override Type SettingsType => typeof(CelesteTasSettings);
 
+    // CelesteTAS v3.45.0 caused an ABI breakage, which is fixed in TAS Helper v2.2.1
+    public static Version RequiredTasHelperVersion = new Version(2, 2, 1);
     public override void Initialize() {
-        // CelesteTAS v3.44.0 caused an ABI breakage, which is fixed in TAS Helper v2.1.10
         if (Everest.Modules.FirstOrDefault(module => module.Metadata.Name == "TASHelper") is { } tasHelperModule) {
-            if (tasHelperModule.Metadata.Version < new Version(2, 1, 10)) {
-                throw new Exception($"TAS Helper v{tasHelperModule.Metadata.Version.ToString(3)} is OUTDATED! Install v2.1.10 or later through Olympus or manually!");
+            if (tasHelperModule.Metadata.Version < RequiredTasHelperVersion) {
+                throw new Exception($"TAS Helper v{tasHelperModule.Metadata.Version.ToString(3)} is OUTDATED! Install v{RequiredTasHelperVersion.ToString(3)} or later through Olympus or manually!");
             }
         }
 
@@ -127,9 +128,24 @@ public class CelesteTasModule : EverestModule {
                 }
                 return true;
             }
+
             case "--sync-check-file": {
                 if (args.TryDequeue(out string? path)) {
                     SyncChecker.AddFile(path);
+                } else {
+                    "Expected file path after --sync-check-file CLI argument".Log(LogLevel.Error);
+                }
+                return true;
+            }
+            case "--sync-check-file-list": {
+                if (args.TryDequeue(out string? fileListPath)) {
+                    if (File.Exists(fileListPath)) {
+                        foreach (string path in File.ReadLines(fileListPath)) {
+                            SyncChecker.AddFile(path);
+                        }
+                    } else {
+                        $"File-list providing TASes to sync-check not found: '{fileListPath}'".Log(LogLevel.Error);
+                    }
                 } else {
                     "Expected file path after --sync-check-file CLI argument".Log(LogLevel.Error);
                 }
@@ -152,6 +168,13 @@ public class CelesteTasModule : EverestModule {
     public override void CreateModMenuSection(TextMenu menu, bool inGame, EventInstance snapshot) {
         CreateModMenuSectionHeader(menu, inGame, snapshot);
         CelesteTasMenu.CreateMenu(this, menu, inGame);
+    }
+
+    public override void OnInputInitialize() {
+        base.OnInputInitialize();
+
+        // CelesteTAS handles all inputs by itself, so there's no need for the ButtonBindings to be registered
+        OnInputDeregister();
     }
 }
 

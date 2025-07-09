@@ -5,6 +5,7 @@ using Microsoft.Xna.Framework;
 using Monocle;
 using MonoMod.Cil;
 using MonoMod.RuntimeDetour;
+using StudioCommunication;
 using StudioCommunication.Util;
 using System;
 using System.Collections.Generic;
@@ -19,6 +20,13 @@ namespace TAS.Gameplay.DesyncFix;
 /// Fixes desyncs caused by SkinMods changing animation lengths / carry offsets,
 /// by splitting the PlayerSprite into a visual and gameplay component
 internal static class SkinModFix {
+    private static bool Enabled => TasSettings.Enabled && TasSettings.PreventSkinModGameplayChanges switch {
+            GameplayEnableCondition.Never => false,
+            GameplayEnableCondition.Always => true,
+            GameplayEnableCondition.DuringTAS => Manager.Running,
+        _ => throw new ArgumentOutOfRangeException()
+    };
+
     /// The `object` must be a boxed PlayerSpriteMode
     private static readonly ConditionalWeakTable<PlayerSprite, object> actualSpriteMode = new();
     private static readonly ConditionalWeakTable<PlayerSprite, PlayerSprite> gameplayToVisualSprites = new();
@@ -169,9 +177,9 @@ internal static class SkinModFix {
     }
 
     private static void On_Player_Update(On.Celeste.Player.orig_Update orig, Player self) {
-        if (Manager.Running) {
+        if (Enabled) {
             bool shouldBeActive = !CheckMapRequiresSkin();
-            bool isActive = gameplayToVisualSprites.TryGetValue(self.Sprite, out var visual);
+            bool isActive = gameplayToVisualSprites.TryGetValue(self.Sprite, out _);
 
             if (shouldBeActive && !isActive) {
                 ApplyPlayer(self);
@@ -195,7 +203,8 @@ internal static class SkinModFix {
         if (!moddedMaps.TryGetValue(session.Area.SID, out var mod)) {
             var area = session.MapData.Area;
             if (Everest.Content.TryGet($"Maps/{AreaData.Get(area).Mode[(int)area.Mode].Path}", out var mapAsset)) {
-                moddedMaps[session.Area.SID] = mod = mapAsset.Source.Mod;
+                // The mod source is null for stay .bin maps
+                moddedMaps[session.Area.SID] = mod = (mapAsset.Source.Mod ?? vanillaModule);
             } else {
                 moddedMaps[session.Area.SID] = mod = vanillaModule;
             }
@@ -207,7 +216,7 @@ internal static class SkinModFix {
     private static bool skipPlayerSpriteHook = false;
     private static void On_PlayerSprite_ctor(On.Celeste.PlayerSprite.orig_ctor orig, PlayerSprite self, PlayerSpriteMode mode) {
         // Separate gameplay and visual sprite
-        if (Manager.Running && !CheckMapRequiresSkin() && !skipPlayerSpriteHook) {
+        if (Enabled && !CheckMapRequiresSkin() && !skipPlayerSpriteHook) {
             var mod = GetActiveMod();
             if (!moddedSpriteBanks.TryGetValue(mod, out var spriteBank)) {
                 moddedSpriteBanks[mod] = spriteBank = CreateSpriteBankForMod(mod);
@@ -376,12 +385,14 @@ internal static class SkinModFix {
 
         if (gameplayToVisualSprites.TryGetValue(newSprite, out var visualSprite)) {
             gameplayToVisualSprites.Remove(newSprite);
-            gameplayToVisualSprites.Add(player.Sprite, visualSprite);
+            gameplayToVisualSprites.AddOrUpdate(player.Sprite, visualSprite);
 
             player.Sprite.CloneInto(visualSprite);
         }
 
         newSprite.CloneInto(player.Sprite);
+
+        "Applied vanilla sprite behaviour to player".Log();
     }
     private static void RestorePlayer(Player player) {
         if (!gameplayToVisualSprites.TryGetValue(player.Sprite, out var visual)) {
@@ -390,5 +401,7 @@ internal static class SkinModFix {
 
         gameplayToVisualSprites.Remove(player.Sprite);
         visual.CloneInto(player.Sprite);
+
+        "Restored default sprite behaviour to player".Log();
     }
 }

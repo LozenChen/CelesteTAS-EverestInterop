@@ -99,7 +99,7 @@ public sealed class Editor : SkiaDrawable {
             return;
 
             void HandleTextChanged(Document _, Dictionary<int, string> insertions, Dictionary<int, string> deletions) {
-                lastModification = DateTime.UtcNow;
+                LastModification = DateTime.UtcNow;
 
                 // Adjust total frame count
                 foreach (string deletion in deletions.Values) {
@@ -127,6 +127,11 @@ public sealed class Editor : SkiaDrawable {
                 FormatLines(insertions.Keys);
                 FixInvalidInputs();
 
+                // Clamp caret/selection
+                Document.Selection.Start.Col = Math.Clamp(Document.Selection.Start.Col, 0, Document.Lines[Document.Selection.Start.Row].Length);
+                Document.Selection.End.Col = Math.Clamp(Document.Selection.End.Col, 0, Document.Lines[Document.Selection.End.Row].Length);
+                Document.Caret.Col = Math.Clamp(Document.Caret.Col, 0, Document.Lines[Document.Caret.Row].Length);
+
                 fixup.Discard(); // We don't want to part of the regular undo stack
                 return fixup.Patches.Count > 0 ? fixup.Patches.Aggregate(Document.Patch.Merge) : null;
             }
@@ -137,6 +142,8 @@ public sealed class Editor : SkiaDrawable {
     private static readonly Regex CommentedBreakpointRegex = new(@"^\s*#\s*\*\*\*", RegexOptions.Compiled);
     private static readonly Regex AllBreakpointRegex = new(@"^\s*#?\s*\*\*\*", RegexOptions.Compiled);
     private static readonly Regex TimestampRegex = new(@"^\s*#+\s*(\d+:)?\d{1,2}:\d{2}\.\d{3}\(\d+\)", RegexOptions.Compiled);
+
+    private const int MaxRepeatCount = 9_999_999;
 
     #region Bindings
 
@@ -302,7 +309,7 @@ public sealed class Editor : SkiaDrawable {
     private const float LineNumberPadding = 5.0f;
 
     /// Indicates last modification time, used to check if the user is currently typing
-    private DateTime lastModification = DateTime.UtcNow;
+    public DateTime LastModification = DateTime.UtcNow;
 
     /// Current total frame count (including commands if connected to Celeste)
     public int TotalFrameCount;
@@ -402,7 +409,7 @@ public sealed class Editor : SkiaDrawable {
             }
 
             if (prevState.CurrentLine == state.CurrentLine &&
-                prevState.SaveStateLine == state.SaveStateLine &&
+                prevState.SaveStateLines.SequenceEqual(state.SaveStateLines) &&
                 prevState.CurrentLineSuffix == state.CurrentLineSuffix) {
                 // Nothing to do
                 return;
@@ -553,16 +560,35 @@ public sealed class Editor : SkiaDrawable {
 
         for (int row = 0; row < Document.Lines.Count; row++) {
             FixInvalidInput(row);
+
+            if (Document.Caret.Row == row) {
+                Document.Caret.Col = Math.Min(Document.Caret.Col, Document.Lines[row].Length);
+            }
         }
     }
     private void FixInvalidInput(int row) {
         using var __ = Document.Update(raiseEvents: false);
 
+        string line = Document.Lines[row];
+
         // Frameless action lines are only intended for editing and shouldn't be part of the final TAS
-        if (ActionLine.TryParse(Document.Lines[row], out var actionLine)) {
+        if (ActionLine.TryParse(line, out var actionLine)) {
             actionLine.FrameCount = Math.Clamp(actionLine.FrameCount, 0, ActionLine.MaxFrames);
 
             Document.ReplaceLine(row, actionLine.ToString());
+            return;
+        }
+        // Repeat command count should be clamped to a valid value
+        // Needs to be kept in sync with the CelesteTAS' validation
+        if (CommandLine.TryParse(line, out var commandLine) &&
+            commandLine.IsCommand("Repeat") &&
+            commandLine.Arguments.Length >= 1 &&
+            int.TryParse(commandLine.Arguments[0], out int repeatCount)
+        ) {
+            commandLine.Arguments[0] = Math.Clamp(repeatCount, 1, MaxRepeatCount).ToString();
+
+            Document.ReplaceLine(row, commandLine.ToString());
+            return;
         }
     }
 
@@ -856,15 +882,33 @@ public sealed class Editor : SkiaDrawable {
         }
     }
 
-    private void AdjustFrameCounts(int rowA, int rowB, int dir) {
+    /// Tweaks frame counts between multiple lines and certain special cases for some commands
+    private void AdjustNumericValues(int rowA, int rowB, int dir) {
         int topRow = Math.Min(rowA, rowB);
         int bottomRow = Math.Max(rowA, rowB);
+
+        // Multiline is not supported for commands
+        if (topRow == bottomRow && CommandLine.TryParse(Document.Lines[topRow], out var commandLine)) {
+            using var __ = Document.Update();
+
+            // Adjust repeat count
+            if (commandLine.IsCommand("Repeat") &&
+                commandLine.Arguments.Length >= 1 &&
+                int.TryParse(commandLine.Arguments[0], out int repeatCount)
+            ) {
+                commandLine.Arguments[0] = Math.Clamp(repeatCount + dir, 1, MaxRepeatCount).ToString();
+
+                Document.ReplaceLine(topRow, commandLine.ToString());
+                return;
+            }
+        }
 
         var topLine = ActionLine.Parse(Document.Lines[topRow]);
         var bottomLine = ActionLine.Parse(Document.Lines[bottomRow]);
 
-        if (topLine == null && bottomLine == null || dir == 0)
+        if (topLine == null && bottomLine == null || dir == 0) {
             return;
+        }
 
         using (Document.Update()) {
             // Adjust single line
@@ -875,11 +919,7 @@ public sealed class Editor : SkiaDrawable {
                 var line = topLine ?? bottomLine!.Value;
                 int row = topLine != null ? topRow : bottomRow;
 
-                if (dir > 0) {
-                    Document.ReplaceLine(row, (line with { FrameCount = Math.Min(line.FrameCount + 1, ActionLine.MaxFrames) }).ToString());
-                } else {
-                    Document.ReplaceLine(row, (line with { FrameCount = Math.Max(line.FrameCount - 1, 0) }).ToString());
-                }
+                Document.ReplaceLine(row, (line with { FrameCount = Math.Clamp(line.FrameCount + dir, 0, ActionLine.MaxFrames) }).ToString());
             }
             // Move frames between lines
             else {
@@ -979,7 +1019,7 @@ public sealed class Editor : SkiaDrawable {
         bool isActionLine = lineTrimmed.StartsWith("***") ||
                             ActionLine.TryParse(Document.Lines[Document.Caret.Row], out _ );
         bool isComment = lineTrimmed.StartsWith('#');
-        bool isTyping = (DateTime.UtcNow - lastModification).TotalSeconds < Settings.Instance.SendInputsTypingTimeout;
+        bool isTyping = (DateTime.UtcNow - LastModification).TotalSeconds < Settings.Instance.SendInputsTypingTimeout;
         bool sendInputs =
             (Settings.Instance.SendInputsOnActionLines && isActionLine) ||
             (Settings.Instance.SendInputsOnComments && isComment) ||
@@ -1115,9 +1155,9 @@ public sealed class Editor : SkiaDrawable {
                 if (e.HasCommonModifier() && e.Shift) {
                     // Adjust frame count
                     if (Document.Selection.Empty) {
-                        AdjustFrameCounts(Document.Caret.Row, Document.Caret.Row, 1);
+                        AdjustNumericValues(Document.Caret.Row, Document.Caret.Row, 1);
                     } else {
-                        AdjustFrameCounts(Document.Selection.Start.Row, Document.Selection.End.Row, 1);
+                        AdjustNumericValues(Document.Selection.Start.Row, Document.Selection.End.Row, 1);
                     }
                 } else if (e.HasAlternateModifier()) {
                     // Move lines
@@ -1145,9 +1185,9 @@ public sealed class Editor : SkiaDrawable {
                 if (e.HasCommonModifier() && e.Shift) {
                     // Adjust frame count
                     if (Document.Selection.Empty) {
-                        AdjustFrameCounts(Document.Caret.Row, Document.Caret.Row, -1);
+                        AdjustNumericValues(Document.Caret.Row, Document.Caret.Row, -1);
                     } else {
-                        AdjustFrameCounts(Document.Selection.Start.Row, Document.Selection.End.Row, -1);
+                        AdjustNumericValues(Document.Selection.Start.Row, Document.Selection.End.Row, -1);
                     }
                 } else if (e.HasAlternateModifier()) {
                     // Move lines
@@ -1186,6 +1226,15 @@ public sealed class Editor : SkiaDrawable {
                 MoveCaret(e.HasCommonModifier() ? CaretMovementType.DocumentEnd : CaretMovementType.LineEnd, updateSelection: e.Shift);
                 e.Handled = true;
                 break;
+
+            // Allow zoom in/out
+            case Keys.Equal when e.HasCommonModifier():
+                AdjustZoom(+0.1f);
+                break;
+            case Keys.Minus when e.HasCommonModifier():
+                AdjustZoom(-0.1f);
+                break;
+
             case Keys.C when e.HasCommonModifier() && e.HasAlternateModifier():
                 Clipboard.Instance.Clear();
                 Clipboard.Instance.Text = Document.FilePath;
@@ -1283,7 +1332,7 @@ public sealed class Editor : SkiaDrawable {
         bool isActionLine = lineTrimmed.StartsWith("***") ||
                             ActionLine.TryParse(Document.Lines[Document.Caret.Row], out _ );
         bool isComment = lineTrimmed.StartsWith('#');
-        bool isTyping = (DateTime.UtcNow - lastModification).TotalSeconds < Settings.Instance.SendInputsTypingTimeout;
+        bool isTyping = (DateTime.UtcNow - LastModification).TotalSeconds < Settings.Instance.SendInputsTypingTimeout;
         bool sendInputs =
             (Settings.Instance.SendInputsOnActionLines && isActionLine) ||
             (Settings.Instance.SendInputsOnComments && isComment) ||
@@ -1305,11 +1354,11 @@ public sealed class Editor : SkiaDrawable {
     }
 
     private void CalculationHandleKey(KeyEventArgs e) {
-        if (calculationState == null)
+        if (calculationState == null) {
             return;
+        }
 
-        switch (e.Key)
-        {
+        switch (e.Key) {
             case Keys.Escape:
                 calculationState = null;
                 e.Handled = true;
@@ -1333,9 +1382,8 @@ public sealed class Editor : SkiaDrawable {
                 calculationState = null;
                 e.Handled = true;
                 return;
-            case >= Keys.D0 and <= Keys.D9 when !e.Shift:
-            {
-                var num = e.Key - Keys.D0;
+            case >= Keys.D0 and <= Keys.D9 when !e.Shift: {
+                int num = e.Key - Keys.D0;
                 calculationState.Operand += num;
                 e.Handled = true;
                 return;
@@ -1349,6 +1397,20 @@ public sealed class Editor : SkiaDrawable {
         }
 
         e.Handled = false;
+    }
+    private bool CalculationHandleText(char c) {
+        if (c is >= '0' and <= '9') {
+            int num = c - '0';
+            calculationState.Operand += num;
+            return true;
+        }
+
+        // Allow A-Z to be handled by the action line editing
+        if (c is >= 'a' and <= 'z' or >= 'A' and <= 'Z') {
+            calculationState = null;
+        }
+
+        return false;
     }
 
     private void CommitCalculation(int stealFrom = 0) {
@@ -2119,6 +2181,11 @@ public sealed class Editor : SkiaDrawable {
             return;
         }
 
+        if (calculationState != null && CalculationHandleText(e.Text[0])) {
+            Invalidate();
+            return;
+        }
+
         string line;
         ActionLine actionLine;
         int leadingSpaces;
@@ -2833,11 +2900,6 @@ public sealed class Editor : SkiaDrawable {
                 }
             }
         }
-
-        // Clamp new column
-        Document.Selection.Start.Col = Math.Clamp(Document.Selection.Start.Col, 0, Document.Lines[Document.Selection.Start.Row].Length);
-        Document.Selection.End.Col = Math.Clamp(Document.Selection.End.Col, 0, Document.Lines[Document.Selection.End.Row].Length);
-        Document.Caret.Col = Math.Clamp(Document.Caret.Col, 0, Document.Lines[Document.Caret.Row].Length);
     }
 
     private void OnToggleCommentInputs() {
@@ -2918,11 +2980,6 @@ public sealed class Editor : SkiaDrawable {
             Document.Caret.Col = oldCol;
             Document.Caret.Row = Math.Min(Document.Lines.Count - 1, Document.Caret.Row + 1);
         }
-
-        // Clamp new column
-        Document.Selection.Start.Col = Math.Clamp(Document.Selection.Start.Col, 0, Document.Lines[Document.Selection.Start.Row].Length);
-        Document.Selection.End.Col = Math.Clamp(Document.Selection.End.Col, 0, Document.Lines[Document.Selection.End.Row].Length);
-        Document.Caret.Col = Math.Clamp(Document.Caret.Col, 0, Document.Lines[Document.Caret.Row].Length);
     }
 
     private void OnToggleCommentText() {
@@ -2990,11 +3047,6 @@ public sealed class Editor : SkiaDrawable {
             Document.Caret.Col = oldCol;
             Document.Caret.Row = Math.Min(Document.Lines.Count - 1, Document.Caret.Row + 1);
         }
-
-        // Clamp new column
-        Document.Selection.Start.Col = Math.Clamp(Document.Selection.Start.Col, 0, Document.Lines[Document.Selection.Start.Row].Length);
-        Document.Selection.End.Col = Math.Clamp(Document.Selection.End.Col, 0, Document.Lines[Document.Selection.End.Row].Length);
-        Document.Caret.Col = Math.Clamp(Document.Caret.Col, 0, Document.Lines[Document.Caret.Row].Length);
     }
 
     private void InsertLine(string text) {
@@ -3535,9 +3587,9 @@ public sealed class Editor : SkiaDrawable {
             if (Document.Selection.Empty) {
                 var (position, _) = LocationToCaretPosition(e.Location);
                 position = ClampCaret(position);
-                AdjustFrameCounts(Document.Caret.Row, position.Row, Math.Sign(e.Delta.Height));
+                AdjustNumericValues(Document.Caret.Row, position.Row, Math.Sign(e.Delta.Height));
             } else {
-                AdjustFrameCounts(Document.Selection.Start.Row, Document.Selection.End.Row, Math.Sign(e.Delta.Height));
+                AdjustNumericValues(Document.Selection.Start.Row, Document.Selection.End.Row, Math.Sign(e.Delta.Height));
             }
 
             e.Handled = true;
@@ -3545,25 +3597,8 @@ public sealed class Editor : SkiaDrawable {
         }
         // Zoom in/out
         if (e.HasCommonModifier()) {
-            float oldCarY = Font.LineHeight() * GetVisualPosition(Document.Caret).Row;
-            float oldOffset = scrollablePosition.Y - oldCarY;
-
             const float scrollSpeed = 0.1f;
-            if (e.Delta.Height > 0.0f) {
-                Settings.Instance.FontZoom *= 1.0f + scrollSpeed;
-            } else if (e.Delta.Height < 0.0f) {
-                Settings.Instance.FontZoom *= 1.0f - scrollSpeed;
-            }
-
-            Settings.OnFontChanged();
-            Recalc();
-
-            float newCarY = Font.LineHeight() * GetVisualPosition(Document.Caret).Row;
-
-            // Adjust scroll to keep caret centered
-            scrollable.ScrollPosition = scrollablePosition with {
-                Y = (int)(newCarY + oldOffset)
-            };
+            AdjustZoom(Math.Sign(e.Delta.Height) * scrollSpeed);
 
             e.Handled = true;
             return;
@@ -3605,6 +3640,22 @@ public sealed class Editor : SkiaDrawable {
 
             Cursor = Cursors.IBeam;
         }
+    }
+
+    private void AdjustZoom(float zoomDelta) {
+        float oldCarY = Font.LineHeight() * GetVisualPosition(Document.Caret).Row;
+        float oldOffset = scrollablePosition.Y - oldCarY;
+
+        Settings.Instance.FontZoom *= 1.0f + zoomDelta;
+        Settings.OnFontChanged();
+        Recalc();
+
+        float newCarY = Font.LineHeight() * GetVisualPosition(Document.Caret).Row;
+
+        // Adjust scroll to keep caret centered
+        scrollable.ScrollPosition = scrollablePosition with {
+            Y = (int)(newCarY + oldOffset)
+        };
     }
 
     private (CaretPosition Actual, CaretPosition Visual) LocationToCaretPosition(PointF location, SnappingDirection direction = SnappingDirection.Ignore) {
@@ -3877,19 +3928,23 @@ public sealed class Editor : SkiaDrawable {
                         h: Font.LineHeight(),
                         fillPaint);
                 }
-                if (CommunicationWrapper.SaveStateLine != -1 && CommunicationWrapper.SaveStateLine < actualToVisualRows.Length) {
+                foreach (int saveStateLine in CommunicationWrapper.SaveStateLines) {
+                    if (saveStateLine < 0 || saveStateLine >= actualToVisualRows.Length) {
+                        continue;
+                    }
+
                     fillPaint.ColorF = Settings.Instance.Theme.SavestateBg.ToSkia();
-                    if (CommunicationWrapper.SaveStateLine == CommunicationWrapper.CurrentLine) {
+                    if (saveStateLine == CommunicationWrapper.CurrentLine) {
                         canvas.DrawRect(
                             x: scrollablePosition.X,
-                            y: actualToVisualRows[CommunicationWrapper.SaveStateLine] * Font.LineHeight(),
+                            y: actualToVisualRows[saveStateLine] * Font.LineHeight(),
                             w: 5.0f,
                             h: Font.LineHeight(),
                             fillPaint);
                     } else {
                         canvas.DrawRect(
                             x: scrollablePosition.X,
-                            y: actualToVisualRows[CommunicationWrapper.SaveStateLine] * Font.LineHeight(),
+                            y: actualToVisualRows[saveStateLine] * Font.LineHeight(),
                             w: textOffsetX - LineNumberPadding,
                             h: Font.LineHeight(),
                             fillPaint);
@@ -3903,10 +3958,10 @@ public sealed class Editor : SkiaDrawable {
                 int oldRow = row;
                 var numberString = (row + 1).ToString();
 
+                int currVisualRow = actualToVisualRows[row];
                 bool isPlayingLine = CommunicationWrapper.CurrentLine >= 0 && CommunicationWrapper.CurrentLine < actualToVisualRows.Length &&
-                                     actualToVisualRows[CommunicationWrapper.CurrentLine] == actualToVisualRows[row];
-                bool isSaveStateLine = CommunicationWrapper.SaveStateLine >= 0 && CommunicationWrapper.SaveStateLine < actualToVisualRows.Length &&
-                                       actualToVisualRows[CommunicationWrapper.SaveStateLine] == actualToVisualRows[row];
+                                     actualToVisualRows[CommunicationWrapper.CurrentLine] == currVisualRow;
+                bool isSaveStateLine = CommunicationWrapper.SaveStateLines.Any(line => line >= 0 && line < actualToVisualRows.Length && actualToVisualRows[line] == currVisualRow);
 
                 if (isPlayingLine) {
                     fillPaint.ColorF = Settings.Instance.Theme.PlayingLineFg.ToSkia();

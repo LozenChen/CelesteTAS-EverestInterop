@@ -3,11 +3,8 @@ using CelesteStudio.Dialog;
 using Eto.Forms;
 using StudioCommunication.Util;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Text.Json;
 using Tomlet.Models;
 
 namespace CelesteStudio.Migration;
@@ -24,8 +21,6 @@ public static class Migrator {
     private static Version oldCelesteTasVersion = null!, newCelesteTasVersion = null!;
     private static Version oldStudioVersion = null!, newStudioVersion = null!;
     private static readonly Version InvalidVersion = new(0, 0, 0);
-
-    private static readonly List<(string versionName, Stream stream)> changelogs = [];
 
     public static void WriteSettings(TomlDocument document) {
         // Write to another file and then move that over, to avoid getting interrupted while writing and corrupting the settings
@@ -63,11 +58,14 @@ public static class Migrator {
             newStudioVersion = Assembly.GetExecutingAssembly().GetName().Version!;
         }
 #endif
+
         if (firstV3Launch) {
             if (studioV2Present) {
                 oldStudioVersion = new Version(2, 0, 0);
+                oldCelesteTasVersion = new Version(3, 39, 5); // Latest version before Studio v3
             } else {
                 oldStudioVersion = newStudioVersion;
+                oldCelesteTasVersion = newCelesteTasVersion;
                 // TODO: Show a "Getting started" guide
             }
         } else {
@@ -80,6 +78,13 @@ public static class Migrator {
                 ? celesteTasVersion
                 : new Version(3, 43, 8); // Latest version before it was stored in the file
         }
+
+        // Force a revision of 0 to avoid issues when comparing
+        oldCelesteTasVersion = new Version(oldCelesteTasVersion.Major, oldCelesteTasVersion.Minor, oldCelesteTasVersion.Build, revision: 0);
+        newCelesteTasVersion = new Version(newCelesteTasVersion.Major, newCelesteTasVersion.Minor, newCelesteTasVersion.Build, revision: 0);
+        oldStudioVersion = new Version(oldStudioVersion.Major, oldStudioVersion.Minor, oldStudioVersion.Build, revision: 0);
+        newStudioVersion = new Version(newStudioVersion.Major, newStudioVersion.Minor, newStudioVersion.Build, revision: 0);
+
 #if DEBUG
         // Always apply the next migration in debug builds
         if (migrations[^2].Version < oldStudioVersion && newStudioVersion == migrations[^1].Version) {

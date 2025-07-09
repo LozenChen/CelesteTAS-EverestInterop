@@ -855,6 +855,27 @@ internal static class TrackerExtensions {
     public static List<T> GetCastComponents<T>(this Tracker tracker) where T : Component {
         return tracker.GetComponents<T>().Where(component => component is T).Cast<T>().ToList();
     }
+
+    public static T? GetEntityTrackIfNeeded<T>(this Tracker tracker) where T : Entity {
+        var entities = tracker.GetEntitiesTrackIfNeeded<T>();
+        return entities.Count == 0 ? null : entities[0] as T;
+    }
+    public static T? GetNearestEntityTrackIfNeeded<T>(this Tracker tracker, Vector2 nearestTo) where T : Entity {
+        var entities = tracker.GetEntitiesTrackIfNeeded<T>();
+        T? nearest = null;
+        float nearestDistSq = 0.0f;
+
+        foreach (var entity in entities) {
+            float distSq = Vector2.DistanceSquared(nearestTo, entity.Position);
+
+            if (nearest == null || distSq < nearestDistSq) {
+                nearest = (T) entity;
+                nearestDistSq = distSq;
+            }
+        }
+
+        return nearest;
+    }
 }
 
 internal static class Vector2Extensions {
@@ -864,7 +885,7 @@ internal static class Vector2Extensions {
 }
 
 internal static class SceneExtensions {
-    public static Player GetPlayer(this Scene scene) => scene.Tracker.GetEntity<Player>();
+    public static Player? GetPlayer(this Scene scene) => scene.Tracker.GetEntity<Player>();
 
     public static Level? GetLevel(this Scene scene) {
         return scene switch {
@@ -1038,6 +1059,15 @@ internal static class EnumerableExtension {
         }
     }
 
+    /// Returns the first matching element; otherwise null
+    public static T? FirstOrNull<T>(this IEnumerable<T> enumerable) where T : struct {
+        using var enumerator = enumerable.GetEnumerator();
+        if (enumerator.MoveNext()) {
+            return enumerator.Current;
+        }
+
+        return null;
+    }
     /// Returns the first matching element; otherwise null
     public static T? FirstOrNull<T>(this IEnumerable<T> enumerable, Func<T, bool> predicate) where T : struct {
         foreach (var item in enumerable) {

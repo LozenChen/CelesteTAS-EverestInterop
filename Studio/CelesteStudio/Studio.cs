@@ -61,9 +61,9 @@ public sealed class Studio : Form {
     private RadelineSimForm.Config radelineFormPersistence = new();
 
     private string TitleBarText => Editor.Document.FilePath == Document.ScratchFile
-        ? $"Studio {Version} - <Scratch>"
+        ? $"Studio {Version} - {(Editor.Document.PendingSave ? "*" : string.Empty)}<Scratch>"
         // Hide username inside title bar
-        : $"Studio {Version} - {(Editor.Document.Dirty ? "*" : string.Empty)}{Editor.Document.FileName}    {Editor.Document.FilePath.Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~")}";
+        : $"Studio {Version} - {(Editor.Document.PendingSave ? "*" : string.Empty)}{Editor.Document.FileName}    {Editor.Document.FilePath.Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~")}";
 
     /// Size of scroll bars, depending on the current platform
     public static int ScrollBarSize {
@@ -388,7 +388,7 @@ public sealed class Studio : Form {
     }
 
     private bool ShouldDiscardChanges(bool checkTempFile = true) {
-        bool showConfirmation = Editor.Document.Dirty;
+        bool showConfirmation = Editor.Document.PendingSave;
 
         // Only ask for discarding changes if scratch file actually contains something
         if (checkTempFile && Editor.Document.FilePath == Document.ScratchFile) {
@@ -491,7 +491,10 @@ public sealed class Studio : Form {
         () => Settings.Instance.SendInputsToCeleste,
         value => {
             Instance.Editor.ShowToastMessage($"{(value ? "Enabled" : "Disabled")} Sending Inputs to Celeste", Editor.DefaultToastTime);
+
             Settings.Instance.SendInputsToCeleste = value;
+            Settings.OnChanged();
+            Settings.Save();
         });
 
     private static readonly EnumBinding<GameInfoType> ShowGameInfo = CreateSettingOption<GameInfoType>("View_ShowGameInfo", "Game Info", new(), Binding.Category.View, Hotkey.None, Hotkey.None, new(), nameof(Settings.GameInfo));
@@ -505,6 +508,11 @@ public sealed class Studio : Form {
         SendInputs,
         ShowGameInfo, ShowSubpixelIndicator, AlwaysOnTop, WrapComments, ShowFoldingIndicator,
     ];
+
+    /// Refreshes the current title to reflect the document state
+    public void RefreshTitle() {
+        Title = TitleBarText;
+    }
 
     public void OpenFileInEditor(string filePath) {
         if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath)) {
@@ -522,11 +530,9 @@ public sealed class Studio : Form {
 
             if (Editor.Document is { } doc) {
                 doc.Dispose();
-                doc.TextChanged -= UpdateTitle;
             }
 
             Editor.Document = document;
-            Editor.Document.TextChanged += UpdateTitle;
         } catch (Exception ex) {
             Console.Error.WriteLine($"Failed to open file '{filePath}'");
             Console.Error.WriteLine(ex);
@@ -542,10 +548,6 @@ public sealed class Studio : Form {
         if (filePath != Document.ScratchFile) {
             Settings.Instance.LastSaveDirectory = Path.GetDirectoryName(filePath)!;
         }
-
-        void UpdateTitle(Document _0, Dictionary<int, string> _1, Dictionary<int, string> _2) {
-            Title = TitleBarText;
-        }
     }
 
     private void OnNewFile() {
@@ -557,15 +559,18 @@ public sealed class Studio : Form {
         var levelInfo = CommunicationWrapper.GetLevelInfo();
 
         string initText = $"RecordCount: 1{Document.NewLine}";
-        if (levelInfo != null && !string.IsNullOrWhiteSpace(levelInfo.Value.ModUrl)) {
-            initText = levelInfo.Value.ModUrl + initText;
+        if (levelInfo?.ModUrl is { } modUrl && !string.IsNullOrWhiteSpace(modUrl)) {
+            initText = modUrl + initText;
         }
         if (!string.IsNullOrWhiteSpace(simpleConsoleCommand)) {
-            initText += $"{Document.NewLine}{simpleConsoleCommand}{Document.NewLine}   1{Document.NewLine}";
+            initText += $"{Document.NewLine}{simpleConsoleCommand}{Document.NewLine}{"1",ActionLine.MaxFramesDigits}{Document.NewLine}";
         }
         initText += $"{Document.NewLine}#Start{Document.NewLine}";
-        if (levelInfo?.WakeupTime is { } wakeupTime) {
-            initText += wakeupTime.ToString().PadLeft(ActionLine.MaxFramesDigits) + Document.NewLine;
+        if (levelInfo?.IntroTime is { } wakeupTime) {
+            initText += $"{wakeupTime.ToString(),ActionLine.MaxFramesDigits}{Document.NewLine}{Document.NewLine}";
+        }
+        if (levelInfo?.StartingRoom is { } startingRoom && !string.IsNullOrWhiteSpace(startingRoom)) {
+            initText += $"#lvl_{startingRoom}{Document.NewLine}{string.Empty,ActionLine.MaxFramesDigits}";
         }
 
         File.WriteAllText(Document.ScratchFile, initText);

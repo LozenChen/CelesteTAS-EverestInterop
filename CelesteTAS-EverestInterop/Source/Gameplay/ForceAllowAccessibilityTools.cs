@@ -6,7 +6,6 @@ using StudioCommunication;
 using System;
 using System.Reflection;
 using TAS.Communication;
-using TAS.Entities;
 using TAS.ModInterop;
 using TAS.Module;
 using TAS.Utils;
@@ -19,9 +18,9 @@ namespace TAS.Gameplay;
 internal static class ForceAllowAccessibilityTools {
 
     private static bool Enabled => TasSettings.Enabled && TasSettings.ForceAllowAccessibilityTools switch {
-        EnableCondition.Never => false,
-        EnableCondition.Always => true,
-        EnableCondition.WhileStudioConnected => CommunicationWrapper.Connected,
+        StudioEnableCondition.Never => false,
+        StudioEnableCondition.Always => true,
+        StudioEnableCondition.WhileStudioConnected => CommunicationWrapper.Connected,
         _ => throw new ArgumentOutOfRangeException()
     };
 

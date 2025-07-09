@@ -6,9 +6,10 @@ using Celeste.Mod;
 using JetBrains.Annotations;
 using Monocle;
 using StudioCommunication;
-using TAS.Entities;
 using TAS.Input.Commands;
 using TAS.Module;
+using TAS.Playback;
+using TAS.Tools;
 using TAS.Utils;
 
 namespace TAS.Input;
@@ -36,8 +37,8 @@ public class InputController {
     public readonly List<InputFrame> Inputs = [];
     public readonly SortedDictionary<int, List<Command>> Commands = new();
     public readonly SortedDictionary<int, List<Comment>> Comments = new();
-    public readonly SortedDictionary<int, FastForward> FastForwards = new();
-    public readonly SortedDictionary<int, FastForward> FastForwardLabels = new();
+    internal readonly SortedDictionary<int, FastForward> FastForwards = new();
+    internal readonly SortedDictionary<int, FastForward> FastForwardLabels = new();
 
     public InputFrame? Previous => Inputs.GetValueOrDefault(CurrentFrameInTas - 1);
     public InputFrame? Current => Inputs.GetValueOrDefault(CurrentFrameInTas);
@@ -50,13 +51,13 @@ public class InputController {
     public List<Command> CurrentCommands => Commands.GetValueOrDefault(CurrentFrameInTas) ?? [];
     public List<Comment> CurrentComments => Comments.GetValueOrDefault(CurrentFrameInTas) ?? [];
 
-    public FastForward? CurrentFastForward => FastForwards.FirstOrDefault(entry => entry.Key > CurrentFrameInTas && entry.Value.ForceStop).Value ??
-                                              NextLabelFastForward ??
-                                              FastForwards.FirstOrDefault(pair => pair.Key > CurrentFrameInTas).Value ??
-                                              FastForwards.LastOrDefault().Value;
+    internal FastForward? CurrentFastForward => FastForwards.FirstOrDefault(entry => entry.Key > CurrentFrameInTas && entry.Value.ForceStop).Value ??
+                                                NextLabelFastForward ??
+                                                FastForwards.FirstOrDefault(pair => pair.Key > CurrentFrameInTas).Value ??
+                                                FastForwards.LastOrDefault().Value;
     public bool HasFastForward => CurrentFastForward is { } forward && forward.Frame > CurrentFrameInTas;
 
-    public FastForward? NextLabelFastForward;
+    internal FastForward? NextLabelFastForward;
 
     /// Indicates whether the current TAS file needs to be reparsed before running
     public bool NeedsReload = true;
@@ -182,15 +183,15 @@ public class InputController {
                         continue;
                     }
 
-                    Toast.ShowAndLog($"""
-                                      {comment.FilePath} line {comment.FileLine}:
-                                      Room label 'lvl_{match.Groups[1].ValueSpan}' does not match actual name 'lvl_{session.Level}'
-                                      """);
+                    PopupToast.ShowAndLog($"""
+                                          {comment.FilePath} line {comment.FileLine}:
+                                          Room label 'lvl_{match.Groups[1].ValueSpan}' does not match actual name 'lvl_{session.Level}'
+                                          """);
                 } else {
-                    Toast.ShowAndLog($"""
-                                      {comment.FilePath} line {comment.FileLine}:
-                                      Found room label '#{comment.Text}' outside of level
-                                      """);
+                    PopupToast.ShowAndLog($"""
+                                           {comment.FilePath} line {comment.FileLine}:
+                                           Found room label '#{comment.Text}' outside of level
+                                           """);
                 }
             }
         }
@@ -250,7 +251,7 @@ public class InputController {
 
         // Add a hidden label at the of the text block
         if (path == FilePath) {
-            FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine);
+            FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine, path, fileLine);
         }
     }
 
@@ -273,7 +274,7 @@ public class InputController {
                 return false;
             }
         } else if (FastForwardLine.TryParse(lineText, out var fastForwardLine)) {
-            var fastForward = new FastForward(CurrentParsingFrame, studioLine, fastForwardLine);
+            var fastForward = new FastForward(CurrentParsingFrame, studioLine, path, fileLine, fastForwardLine);
             if (FastForwards.TryGetValue(CurrentParsingFrame, out var oldFastForward) && oldFastForward.SaveState && !fastForward.SaveState) {
                 // ignore
             } else {
@@ -281,13 +282,13 @@ public class InputController {
             }
         } else if (lineText.StartsWith("#")) {
             if (CommentLine.IsLabel(lineText)) {
-                FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine);
+                FastForwardLabels[CurrentParsingFrame] = new FastForward(CurrentParsingFrame, studioLine, path, fileLine);
             }
 
             if (!Comments.TryGetValue(CurrentParsingFrame, out var comments)) {
                 Comments[CurrentParsingFrame] = comments = [];
             }
-            comments.Add(new Comment(CurrentParsingFrame, path, fileLine, lineText));
+            comments.Add(new Comment(CurrentParsingFrame, path, fileLine, studioLine, lineText));
         } else if (!AutoInputCommand.TryInsert(path, fileLine, lineText, studioLine, repeatIndex, repeatCount)) {
             AddFrames(lineText, path, fileLine, studioLine, repeatIndex, repeatCount);
         }
@@ -356,7 +357,11 @@ public class InputController {
 
     /// Create file-system-watchers for all TAS-files used, to detect changes
     public void StartWatchers() {
-        foreach (var path in UsedFiles) {
+        if (SyncChecker.Active) {
+            return; // Avoid reloading TASes during sync-check
+        }
+
+        foreach (string path in UsedFiles) {
             string fullPath = Path.GetFullPath(path);
 
             // Watch TAS file
@@ -404,6 +409,7 @@ public class InputController {
         var hash = new HashCode();
         hash.Add(filePath);
 
+        upToFrame = Calc.Clamp(upToFrame, 0, Inputs.Count);
         for (int i = 0; i < upToFrame; i++) {
             hash.Add(Inputs[i]);
 

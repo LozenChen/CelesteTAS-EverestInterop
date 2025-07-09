@@ -6,9 +6,9 @@ using Celeste.Mod;
 using Microsoft.Xna.Framework;
 using Monocle;
 using StudioCommunication;
-using TAS.Entities;
 using TAS.Input;
 using TAS.Module;
+using TAS.Playback;
 using TAS.Utils;
 
 namespace TAS.EverestInterop.InfoHUD;
@@ -60,7 +60,7 @@ public static class InfoHud {
 
             if (TasSettings.InfoHud && TasSettings.EnableInfoHudFirstTime) {
                 TasSettings.EnableInfoHudFirstTime = false;
-                Toast.Show($"Info HUD is provided by TAS Mod\nDouble press {Hotkeys.InfoHud} to toggle it", 5);
+                PopupToast.Show($"Info HUD is provided by TAS Mod\nDouble press {Hotkeys.InfoHud} to toggle it", 10.0f);
             }
 
             CelesteTasModule.Instance.SaveSettings();
@@ -165,7 +165,7 @@ public static class InfoHud {
             return;
         }
 
-        var current = controller.Current;
+        var current = controller.Current!;
         if (controller.CurrentFrameInTas >= 1 && current != controller.Previous) {
             current = controller.Previous!;
         }
@@ -179,11 +179,6 @@ public static class InfoHud {
         int maxFrames = Math.Max(current.Frames, Math.Max(previous?.Frames ?? 0, next?.Frames ?? 0));
         int framesPadLeft = maxFrames.ToString().Length;
 
-        string FormatInputFrame(InputFrame inputFrame) {
-            return
-                $"{(inputFrame.StudioLine + 1).ToString().PadLeft(linePadLeft)}: {string.Empty.PadLeft(framesPadLeft - inputFrame.Frames.ToString().Length)}{inputFrame}";
-        }
-
         if (previous != null) {
             stringBuilder.AppendLine(FormatInputFrame(previous));
         }
@@ -192,11 +187,20 @@ public static class InfoHud {
         int currentFrameLength = controller.CurrentFrameInInput.ToString().Length;
         int inputWidth = currentStr.Length + currentFrameLength + 2;
         inputWidth = Math.Max(inputWidth, 20);
-        stringBuilder.AppendLine(
-            $"{currentStr.PadRight(inputWidth - currentFrameLength)}{controller.CurrentFrameInInput}{current.RepeatString}");
+        stringBuilder.AppendLine($"{currentStr.PadRight(inputWidth - currentFrameLength)}{controller.CurrentFrameInInput}{current.RepeatString}");
 
         if (next != null) {
             stringBuilder.AppendLine(FormatInputFrame(next));
+        }
+
+        return;
+
+        string FormatInputFrame(InputFrame inputFrame) {
+            string line    = (inputFrame.StudioLine + 1).ToString().PadLeft(linePadLeft);
+            string padding = string.Empty.PadLeft(framesPadLeft - inputFrame.Frames.ToString().Length);
+            string input   = inputFrame.ToString().TrimStart();
+
+            return $"{line}: {padding}{input}";
         }
     }
 
