@@ -64,6 +64,7 @@ public static class Manager {
 
     private static PopupToast.Entry? frameStepEofToast = null;
     private static PopupToast.Entry? autoPauseDraft = null;
+    private static bool seenAutoPauseToast = false;
 
     // Allow accumulation of frames to step back, since the operation is time intensive
     internal static int FrameStepBackTargetFrame = -1;
@@ -177,8 +178,12 @@ public static class Manager {
             return;
         }
 
-        if (Controller.HasFastForward || FrameStepBackTargetFrame > 0) {
+        if (FrameStepBackTargetFrame > 0) {
             NextState = State.Running;
+            PlaybackSpeed = FastForward.DefaultSpeed;
+        } else if (Controller.CurrentFastForward is { } forward && forward.Frame > Controller.CurrentFrameInTas) {
+            NextState = State.Running;
+            PlaybackSpeed = forward.Speed;
         }
 
         Controller.AdvanceFrame(out bool couldPlayback);
@@ -198,14 +203,15 @@ public static class Manager {
             NextState = State.Paused;
 
             if (CurrState == State.Running && !FastForwarding) {
-                const string text = "Auto-pause draft on end:\nInsert any Time command or disable the setting to prevent the pausing";
-                const float duration = 2.0f;
+                float duration = seenAutoPauseToast ? 2.0f : 8.0f;
                 if (autoPauseDraft is not { Active: true }) {
-                    autoPauseDraft = PopupToast.Show(text, duration);
+                    autoPauseDraft = PopupToast.Show(Dialog.Clean("TAS_AutoPauseToast"), duration);
                 } else {
-                    autoPauseDraft.Text = text;
+                    autoPauseDraft.Text = Dialog.Clean("TAS_AutoPauseToast");
                     autoPauseDraft.Timeout = duration;
                 }
+
+                seenAutoPauseToast = true;
             }
         }
         // Pause the TAS if breakpoint is hit
@@ -412,7 +418,9 @@ public static class Manager {
     /// TAS-execution is paused during loading screens
     public static bool IsLoading() {
         return Engine.Scene switch {
-            Level level => level.IsAutoSaving() && level.Session.Level == "end-cinematic",
+            Level level => level.IsAutoSaving() && level.Session.Level == "end-cinematic" ||
+                           // Saving after closing a menu yields until it's done, however need to avoid catching auto-save
+                           level.Paused && UserIO.Saving && !level.IsAutoSaving(),
             SummitVignette summit => !summit.ready,
             Overworld overworld => overworld.Current is OuiFileSelect { SlotIndex: >= 0 } slot && slot.Slots[slot.SlotIndex].StartingGame ||
                                    overworld.Next is OuiChapterSelect && UserIO.Saving ||
@@ -430,7 +438,8 @@ public static class Manager {
         }
 
         return Engine.Scene switch {
-            Level level => level.IsAutoSaving(),
+            Level level => level.IsAutoSaving() && level.Session.Level == "end-cinematic" ||
+                           level.Paused && UserIO.Saving && !level.IsAutoSaving(),
             SummitVignette summit => !summit.ready,
             Overworld overworld => overworld.Next is OuiChapterSelect && UserIO.Saving ||
                                    overworld.Next is OuiMainMenu && (UserIO.Saving || Everest._SavingSettings),

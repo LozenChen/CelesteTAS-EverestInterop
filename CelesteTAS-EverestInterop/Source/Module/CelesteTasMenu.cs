@@ -79,23 +79,61 @@ internal static class CelesteTasMenu {
             }));
             subMenu.AddDescription(menu, betterInvincible, "Better Invincible Description".ToDialogText());
 
+            static void UpdateForceAllowAccessibilityDesc(TextMenuExt.EaseInSubHeaderExt desc, StudioEnableCondition value) {
+                switch (value) {
+                    case StudioEnableCondition.Never:
+                        desc.FadeVisible = false;
+                        break;
+                    case StudioEnableCondition.Always:
+                        desc.Title = "FORCE_ALLOW_ACCESS_TOOLS_DESC_D".ToDialogText();
+                        desc.TextColor = Color.Red;
+                        desc.FadeVisible = true;
+                        break;
+                    case StudioEnableCondition.WhileStudioConnected:
+                        desc.Title = "FORCE_ALLOW_ACCESS_TOOLS_DESC_A".ToDialogText();
+                        desc.TextColor = Color.Gray;
+                        desc.FadeVisible = true;
+                        break;
+                    case StudioEnableCondition.ForCurrentSession:
+                        desc.Title = "FORCE_ALLOW_ACCESS_TOOLS_DESC_C".ToDialogText();
+                        desc.TextColor = Color.Yellow;
+                        desc.FadeVisible = true;
+                        break;
+                    case StudioEnableCondition.AfterCasualPlaythrough:
+                        desc.Title = "FORCE_ALLOW_ACCESS_TOOLS_DESC_B".ToDialogText();
+                        desc.TextColor = Color.Gray;
+                        desc.FadeVisible = true;
+                        break;
+                }
+            }
+
             TextMenu.Item forceAllowAccessibilityTools;
+            TextMenuExt.EaseInSubHeaderExt forceAllowAccessibilityToolsExtraDesc = null!;
             subMenu.Add(forceAllowAccessibilityTools = new TextMenuExt.EnumerableSlider<StudioEnableCondition>("FORCE_ALLOW_ACCESS_TOOLS".ToDialogText(), [
                     new KeyValuePair<StudioEnableCondition, string>(StudioEnableCondition.Never, "NEVER".ToDialogText()),
                     new KeyValuePair<StudioEnableCondition, string>(StudioEnableCondition.WhileStudioConnected, "StudioEnableCondition_StudioConnected".ToDialogText()),
+                    new KeyValuePair<StudioEnableCondition, string>(StudioEnableCondition.AfterCasualPlaythrough, "StudioEnableCondition_AfterCasual".ToDialogText()),
+                    new KeyValuePair<StudioEnableCondition, string>(StudioEnableCondition.ForCurrentSession, "StudioEnableCondition_CurrentSession".ToDialogText()),
                     new KeyValuePair<StudioEnableCondition, string>(StudioEnableCondition.Always, "ALWAYS".ToDialogText())
                 ], TasSettings.ForceAllowAccessibilityTools)
-                .Change(value => TasSettings.ForceAllowAccessibilityTools = value));
-            subMenu.AddDescription(menu, forceAllowAccessibilityTools, "FORCE_ALLOW_ACCESS_TOOLS_DESC".ToDialogText());
+                .Change(value => {
+                    TasSettings.ForceAllowAccessibilityTools = value;
+                    UpdateForceAllowAccessibilityDesc(forceAllowAccessibilityToolsExtraDesc, value);
+                }));
+            subMenu.AddDescription(menu, forceAllowAccessibilityTools, "FORCE_ALLOW_ACCESS_TOOLS_DESC_1".ToDialogText());
+            subMenu.AddDescription(menu, forceAllowAccessibilityTools, "FORCE_ALLOW_ACCESS_TOOLS_DESC_2".ToDialogText(), Color.Orange);
+            forceAllowAccessibilityToolsExtraDesc = subMenu.AddDescription(menu, forceAllowAccessibilityTools, string.Empty);
+            UpdateForceAllowAccessibilityDesc(forceAllowAccessibilityToolsExtraDesc, TasSettings.ForceAllowAccessibilityTools);
+            forceAllowAccessibilityToolsExtraDesc.FadeVisible = false;
 
             TextMenu.Item preventSkinModGameplayChangesRTA;
-            subMenu.Add(preventSkinModGameplayChangesRTA = new TextMenuExt.EnumerableSlider<GameplayEnableCondition>("PREVENT_SKINMOD_CHANGES_RTA".ToDialogText(), [
+            subMenu.Add(preventSkinModGameplayChangesRTA = new TextMenuExt.EnumerableSlider<GameplayEnableCondition>("PREVENT_SKINMOD_CHANGES".ToDialogText(), [
                     new KeyValuePair<GameplayEnableCondition, string>(GameplayEnableCondition.Never, "NEVER".ToDialogText()),
                     new KeyValuePair<GameplayEnableCondition, string>(GameplayEnableCondition.DuringTAS, "GameplayEnableCondition_DuringTAS".ToDialogText()),
                     new KeyValuePair<GameplayEnableCondition, string>(GameplayEnableCondition.Always, "ALWAYS".ToDialogText())
                 ], TasSettings.PreventSkinModGameplayChanges)
                 .Change(value => TasSettings.PreventSkinModGameplayChanges = value));
-            subMenu.AddDescription(menu, preventSkinModGameplayChangesRTA, "PREVENT_SKINMOD_CHANGES_RTA_DESC".ToDialogText());
+            subMenu.AddDescription(menu, preventSkinModGameplayChangesRTA, "PREVENT_SKINMOD_CHANGES_DESC".ToDialogText());
 
             TextMenu.Item hideFreezeFramesItem;
             subMenu.Add(hideFreezeFramesItem = new TextMenu.OnOff("Hide Freeze Frames".ToDialogText(), TasSettings.HideFreezeFrames).Change(value =>
@@ -108,7 +146,7 @@ internal static class CelesteTasMenu {
         });
     }
 
-    public static void AddDescription(this TextMenuExt.SubMenu subMenu, TextMenu containingMenu, TextMenu.Item subMenuItem, string description, Color? color = null) {
+    public static TextMenuExt.EaseInSubHeaderExt AddDescription(this TextMenuExt.SubMenu subMenu, TextMenu containingMenu, TextMenu.Item subMenuItem, string description, Color? color = null) {
         TextMenuExt.EaseInSubHeaderExt descriptionText = new(description, false, containingMenu) {
             TextColor = color ?? Color.Gray,
             HeightExtra = 0f
@@ -118,6 +156,8 @@ internal static class CelesteTasMenu {
 
         subMenuItem.OnEnter += () => descriptionText.FadeVisible = true;
         subMenuItem.OnLeave += () => descriptionText.FadeVisible = false;
+
+        return descriptionText;
     }
 
 #pragma warning disable CS0612

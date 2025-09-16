@@ -1,4 +1,4 @@
-﻿using Celeste;
+using Celeste;
 using Celeste.Mod;
 using System;
 using System.Collections.Generic;
@@ -49,6 +49,12 @@ internal static class HookHelper {
         from.IlHook(il => {
             var cursor = new ILCursor(il);
             manipulator(cursor, il);
+
+            try {
+                il.Method.FixShortLongOps();
+            } catch {
+                // Some methods have slightly weird IL, causing that method to crash
+            }
         });
     }
 

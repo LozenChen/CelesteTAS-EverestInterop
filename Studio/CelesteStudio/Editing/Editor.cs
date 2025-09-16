@@ -128,6 +128,9 @@ public sealed class Editor : SkiaDrawable {
                 FixInvalidInputs();
 
                 // Clamp caret/selection
+                Document.Selection.Start.Row = Math.Clamp(Document.Selection.Start.Row, 0, Document.Lines.Count - 1);
+                Document.Selection.End.Row = Math.Clamp(Document.Selection.End.Row, 0, Document.Lines.Count - 1);
+                Document.Caret.Row = Math.Clamp(Document.Caret.Row, 0, Document.Lines.Count - 1);
                 Document.Selection.Start.Col = Math.Clamp(Document.Selection.Start.Col, 0, Document.Lines[Document.Selection.Start.Row].Length);
                 Document.Selection.End.Col = Math.Clamp(Document.Selection.End.Col, 0, Document.Lines[Document.Selection.End.Row].Length);
                 Document.Caret.Col = Math.Clamp(Document.Caret.Col, 0, Document.Lines[Document.Caret.Row].Length);
@@ -175,7 +178,7 @@ public sealed class Editor : SkiaDrawable {
     private static readonly ActionBinding ToggleCommentInputs = CreateAction("Editor_CommentUncommentInputs", "Comment / Uncomment Inputs", Hotkey.KeyCtrl(Keys.K), editor => editor.OnToggleCommentInputs());
     private static readonly ActionBinding ToggleCommentText = CreateAction("Editor_CommentUncommentText", "Comment / Uncomment Text", Hotkey.KeyCtrl(Keys.K | Keys.Shift), editor => editor.OnToggleCommentText());
 
-    private static readonly ActionBinding InsertRoomName = CreateAction("Editor_InsertRoomName", "Insert current Room Name", Hotkey.KeyCtrl(Keys.R), editor => editor.InsertLine($"#lvl_{CommunicationWrapper.LevelName}"));
+    private static readonly ActionBinding InsertRoomName = CreateAction("Editor_InsertRoomName", "Insert current Room Name", Hotkey.KeyCtrl(Keys.R), editor => editor.InsertLine($"#lvl_{CommunicationWrapper.LevelName.Trim()}"));
     private static readonly ActionBinding InsertChapterTime = CreateAction("Editor_InsertCurrentChapterTime", "Insert current ChapterTime", Hotkey.KeyCtrl(Keys.T), editor => editor.InsertLine($"#{CommunicationWrapper.ChapterTime}"));
     private static readonly ActionBinding RemoveAllTimestamps = CreateAction("Editor_RemoveAllTimestamps", "Remove All Timestamps", Hotkey.KeyCtrl(Keys.T | Keys.Shift), editor => editor.RemoveLinesMatching(TimestampRegex));
 
@@ -1399,6 +1402,10 @@ public sealed class Editor : SkiaDrawable {
         e.Handled = false;
     }
     private bool CalculationHandleText(char c) {
+        if (calculationState == null) {
+            return false;
+        }
+
         if (c is >= '0' and <= '9') {
             int num = c - '0';
             calculationState.Operand += num;

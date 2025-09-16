@@ -76,6 +76,8 @@ public enum StudioEnableCondition {
     Never,
     Always,
     WhileStudioConnected,
+    ForCurrentSession,
+    AfterCasualPlaythrough,
 }
 /// Condition for when to enable certain features, related to gameplay state
 public enum GameplayEnableCondition {

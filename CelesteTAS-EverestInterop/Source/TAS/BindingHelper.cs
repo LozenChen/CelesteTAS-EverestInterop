@@ -131,7 +131,7 @@ public static class BindingHelper {
     private static void ClearModsBindings() {
         foreach (EverestModule module in Everest.Modules) {
             if (module.SettingsType is { } settingsType && module._Settings is { } settings and not CelesteTasSettings) {
-                foreach (PropertyInfo propertyInfo in settingsType.GetAllPropertyInfos()) {
+                foreach (PropertyInfo propertyInfo in settingsType.GetAllPropertyInfos(ReflectionExtensions.InstanceAnyVisibility)) {
                     if (propertyInfo.GetGetMethod(true) != null && propertyInfo.GetSetMethod(true) != null &&
                         propertyInfo.PropertyType == typeof(ButtonBinding) && propertyInfo.GetValue(settings) is ButtonBinding {Button: { } button}) {
                         button.Binding = new Binding();
@@ -171,5 +171,16 @@ public static class BindingHelper {
         }
         origCrouchDashMode = null;
         origGrabMode = null;
+    }
+
+    [SaveState]
+    private static void SaveState(SavestateData data) {
+        data[nameof(Settings.CrouchDashMode)] = Settings.Instance.CrouchDashMode;
+        data[nameof(Settings.GrabMode)] = Settings.Instance.GrabMode;
+    }
+    [LoadState]
+    private static void LoadState(SavestateData data) {
+        Settings.Instance.CrouchDashMode = (CrouchDashModes) data[nameof(Settings.CrouchDashMode)]!;
+        Settings.Instance.GrabMode = (GrabModes) data[nameof(Settings.GrabMode)]!;
     }
 }

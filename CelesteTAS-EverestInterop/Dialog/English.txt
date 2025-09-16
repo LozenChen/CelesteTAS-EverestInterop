@@ -117,10 +117,16 @@ TAS_BETTER_INVINCIBILITY=                   Better Invincibility
 TAS_BETTER_INVINCIBLE_DESCRIPTION=          Running "Set Invincible true" will still prevent dying, but avoids gameplay changes like bouncing of the death plane,
                                             to avoid accidentally desyncing the TAS. Applies only while a TAS is active.
 TAS_FORCE_ALLOW_ACCESS_TOOLS=               Force Allow Accessibility Tools
-TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC=          Forcefully re-enabled accessibility tools (such as the Debug Map) which were intentionally disabled.
-                                            This goes against the intended experience of a casual playthrough and you could ruin your own experience.
-TAS_PREVENT_SKINMOD_CHANGES_RTA=            Prevent Skin-Mod Gameplay Changes
-TAS_PREVENT_SKINMOD_CHANGES_RTA_DESC=       Applies the vanilla gameplay behaviour for player animation lengths and holdable positions.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_1=        Forcefully re-enabled accessibility tools (such as the Debug Map) which were intentionally disabled.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_2=        This goes against the intended experience of a casual playthrough and could ruin your experience
+                                            by accidentally spoiling secrets or modifying your save data in unintentional / broken ways.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_A=        Only activated while Celeste Studio is open and connected to Celeste.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_B=        Only activated after the current level has already been beaten once, or the Debug Save is used.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_C=        Activated for all levels! Make sure to not accidentally ruin your casual experience with this being active!
+                                            Resets to default value after restarting the game.
+TAS_FORCE_ALLOW_ACCESS_TOOLS_DESC_D=        Always active for all levels! This has a high chance of being left turned on, potentially ruining your casual experience!
+TAS_PREVENT_SKINMOD_CHANGES=                Prevent Skin-Mod Gameplay Changes
+TAS_PREVENT_SKINMOD_CHANGES_DESC=           Applies the vanilla gameplay behaviour for player animation lengths and holdable positions.
 TAS_HIDE_FREEZE_FRAMES=                     Hide Freeze Frames during TAS
 TAS_HIDE_FREEZE_FRAMES_DESCRIPTION=         When a freeze-frame is encountered, skip it without rendering
                                             Applies only while a TAS is active.
@@ -147,6 +153,11 @@ TAS_KEY_CLEAR_STATE=                        Clear State in TAS
 TAS_KEY_INFO_HUD=                           Info HUD
 TAS_KEY_FREE_CAMERA=                        Free Camera
 
+# ============================================== Toast Messages ==============================================
+TAS_AutoPauseToast=                         Auto-pause draft on end:
+                                            Insert any *Time command at the end or disable the setting
+                                            See 'Mod Options -> Celeste TAS -> More Options' for additional information
+
 # ============================================== Option Values ==============================================
 TAS_DEFAULT=                                Default
 TAS_HIDE=                                   Hide
@@ -165,4 +176,6 @@ TAS_APPEND=                                 Append
 TAS_NEVER=                                  Never
 TAS_ALWAYS=                                 Always
 TAS_StudioEnableCondition_StudioConnected=  While Studio is Connected
+TAS_StudioEnableCondition_AfterCasual=      After Casual Playthrough
+TAS_StudioEnableCondition_CurrentSession=   For Current Session
 TAS_GameplayEnableCondition_DuringTAS=      During TAS

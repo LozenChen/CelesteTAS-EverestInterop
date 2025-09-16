@@ -5,13 +5,16 @@ using Microsoft.Xna.Framework;
 using Monocle;
 using MonoMod.Cil;
 using MonoMod.RuntimeDetour;
+using MonoMod.Utils;
 using StudioCommunication;
 using StudioCommunication.Util;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Xml;
+using TAS.ModInterop;
 using TAS.Module;
 using TAS.Utils;
 
@@ -79,6 +82,71 @@ internal static class SkinModFix {
         On.Monocle.Sprite.Play -= On_Sprite_Play;
         On.Monocle.Sprite.PlayOffset -= On_Sprite_PlayOffset;
         On.Monocle.Sprite.Reverse -= On_Sprite_Reverse;
+    }
+    [Initialize]
+    private static void Initialize() {
+        // Add color grade, hair and death particle support for SMH+
+        ModUtils.GetType("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.PlayerSkinSystem")
+            ?.GetAllMethodInfos()
+            .ForEach(method => method.IlHook((cursor, _) => FixPlayerHairSprite(cursor)));
+        ModUtils.GetType("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.HairConfig")
+            ?.GetAllMethodInfos()
+            .ForEach(method => method.IlHook((cursor, _) => FixPlayerHairSprite(cursor)));
+
+        ModUtils.GetMethod("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.SkinsSystem", "SyncColorGrade")
+            ?.IlHook((cursor, _) => {
+                FixSpriteParameter(cursor, index: 0);
+                FixSpriteParameter(cursor, index: 1);
+            });
+        ModUtils.GetMethod("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.PlayerSkinSystem", "SpriteRenderHook_ColorGrade")
+            ?.IlHook((cursor, _) => FixSpriteParameter(cursor, index: 1));
+        ModUtils.GetMethod("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.CharacterConfig", "For")
+            ?.IlHook((cursor, _) => FixSpriteParameter(cursor, index: 0));
+
+        ModUtils.GetMethod("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.SomePatches", "DeathEffectDrawHook")
+            ?.IlHook((cursor, il) => {
+                int spriteIdx = il.Body.Variables.IndexOf(var => var.VariableType.ResolveReflection() == typeof(Sprite));
+
+                cursor.GotoNext(MoveType.AfterLabel, instr => instr.MatchStloc(spriteIdx));
+                cursor.EmitDelegate(CorrectVisualSprite);
+            });
+        ModUtils.GetMethod("SkinModHelperPlus", "Celeste.Mod.SkinModHelper.SomePatches", "DeathEffectRenderHook")
+            ?.IlHook((cursor, il) => {
+                int spriteIdx = il.Body.Variables.IndexOf(var => var.VariableType.ResolveReflection() == typeof(Sprite));
+
+                cursor.GotoNext(MoveType.AfterLabel, instr => instr.MatchStloc(spriteIdx));
+                cursor.EmitDelegate(CorrectVisualSprite);
+            });
+
+        // The Avali Skinmod (non-SMH) has custom code to swap the sprites dynamically,
+        // which needs to reference the visual sprite, instead of gameplay one.
+        ModUtils.GetMethod("Avali-Skinmod", "Celeste.Mod.AvaliSkin.AvaliSkinModule", "trySpriteSwap")
+            ?.IlHook((cursor, _) => FixSpriteParameter(cursor, index: 1));
+
+        return;
+
+        static Sprite CorrectVisualSprite(Sprite sprite) {
+            if (sprite is PlayerSprite playerSprite && gameplayToVisualSprites.TryGetValue(playerSprite, out var visualSprite)) {
+                return visualSprite;
+            }
+
+            return sprite;
+        }
+
+        static void FixSpriteParameter(ILCursor cursor, int index) {
+#if DEBUG
+            Debug.Assert(typeof(PlayerSprite).IsAssignableTo(cursor.Method.Parameters[index].ParameterType.ResolveReflection()));
+#endif
+
+            cursor.EmitLdarg(index);
+            cursor.EmitDelegate(CorrectVisualSprite);
+            cursor.EmitStarg(index);
+        }
+        static void FixPlayerHairSprite(ILCursor cursor) {
+            while (cursor.TryGotoNext(MoveType.After, instr => instr.MatchLdfld<PlayerHair>(nameof(PlayerHair.Sprite)))) {
+                cursor.EmitDelegate(CorrectVisualSprite);
+            }
+        }
     }
 
     private static bool CheckMapRequiresSkin() {
@@ -363,13 +431,13 @@ internal static class SkinModFix {
 
     [EnableRun]
     private static void Apply() {
-        if (Engine.Scene.GetPlayer() is { } player) {
+        if (Engine.Scene.GetPlayer() is { } player && TasSettings.PreventSkinModGameplayChanges == GameplayEnableCondition.DuringTAS) {
             ApplyPlayer(player);
         }
     }
     [DisableRun]
     private static void Restore() {
-        if (Engine.Scene.GetPlayer() is { } player) {
+        if (Engine.Scene.GetPlayer() is { } player && TasSettings.PreventSkinModGameplayChanges == GameplayEnableCondition.DuringTAS) {
             RestorePlayer(player);
         }
     }

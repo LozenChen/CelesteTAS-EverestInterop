@@ -23,6 +23,8 @@ public class ParseFileEndAttribute : Attribute;
 [AttributeUsage(AttributeTargets.Method), MeansImplicitUse]
 public class TasFileChangedAttribute : Attribute;
 
+internal readonly record struct SourceLocation(string FilePath, int FileLine, int StudioLine);
+
 /// Manages inputs, commands, etc. for the current TAS file
 public class InputController {
     [Initialize]
@@ -76,6 +78,9 @@ public class InputController {
 
     /// Whether the TAS should be paused on this frame
     public bool Break => CurrentFastForward?.Frame == CurrentFrameInTas || FastForwards.Any(entry => entry.Key == CurrentFrameInTas && entry.Value.ForceStop);
+
+    // TODO: Convert into parameter while parsing
+    internal bool EnableBreakpointParsing = true;
 
     private static readonly string DefaultFilePath = Path.Combine(Everest.PathEverest, "Celeste.tas");
 
@@ -176,23 +181,27 @@ public class InputController {
         // Validate that room labels are correct, to catch desyncs and ensure they're not accidentally messed up
         // Check comments of previous frame, since during the first frame of a transition, the room name won't be updated yet
         // However semantically, it is perfectly valid to do so, from a TAS perspective
-        foreach (var comment in Comments.GetValueOrDefault(CurrentFrameInTas - 1) ?? []) {
-            if (CommentLine.RoomLabelRegex.Match($"#{comment.Text}") is { Success: true } match) {
-                if (Engine.Scene.GetSession() is { } session) {
-                    if (match.Groups[1].ValueSpan.SequenceEqual(session.Level)) {
-                        continue;
-                    }
+        var logLevel = SyncChecker.ValidateRoomLabels ? LogLevel.Error : LogLevel.Warn;
 
-                    PopupToast.ShowAndLog($"""
-                                          {comment.FilePath} line {comment.FileLine}:
-                                          Room label 'lvl_{match.Groups[1].ValueSpan}' does not match actual name 'lvl_{session.Level}'
-                                          """);
-                } else {
-                    PopupToast.ShowAndLog($"""
-                                           {comment.FilePath} line {comment.FileLine}:
-                                           Found room label '#{comment.Text}' outside of level
-                                           """);
+        foreach (var comment in Comments.GetValueOrDefault(CurrentFrameInTas - 1) ?? []) {
+            if (CommentLine.RoomLabelRegex.Match($"#{comment.Text}") is not { Success: true } match) {
+                continue;
+            }
+
+            if (Engine.Scene.GetSession() is { } session) {
+                var labelSpan = match.Groups[1].ValueSpan.Trim();
+                var levelSpan = session.Level.AsSpan().Trim();
+                if (labelSpan.SequenceEqual(levelSpan)) {
+                    continue;
                 }
+
+                ReportMessage(comment.Source, $"Room label 'lvl_{labelSpan}' does not match actual name 'lvl_{levelSpan}'", level: logLevel);
+            } else {
+                ReportMessage(comment.Source, $"Found room label '#{comment.Text}' outside of level", level: logLevel);
+            }
+
+            if (SyncChecker.ValidateRoomLabels) {
+                Manager.DisableRunLater();
             }
         }
 
@@ -274,6 +283,10 @@ public class InputController {
                 return false;
             }
         } else if (FastForwardLine.TryParse(lineText, out var fastForwardLine)) {
+            if (!EnableBreakpointParsing) {
+                return true;
+            }
+
             var fastForward = new FastForward(CurrentParsingFrame, studioLine, path, fileLine, fastForwardLine);
             if (FastForwards.TryGetValue(CurrentParsingFrame, out var oldFastForward) && oldFastForward.SaveState && !fastForward.SaveState) {
                 // ignore
@@ -353,6 +366,32 @@ public class InputController {
         NeedsReload = true;
 
         AttributeUtils.Invoke<ClearInputsAttribute>();
+    }
+
+    internal void ReportError(SourceLocation src, string message, bool log = true, float duration = PopupToast.DefaultDuration) {
+        ReportMessage(src, message, level: LogLevel.Error);
+        Manager.DisableRunLater();
+    }
+    internal void ReportWarning(SourceLocation src, string message, bool log = true, float duration = PopupToast.DefaultDuration) {
+        ReportMessage(src, message, level: LogLevel.Warn);
+    }
+    internal void ReportMessage(SourceLocation src, string message, LogLevel level, bool log = false, float duration = PopupToast.DefaultDuration) {
+#if DEBUG
+        // Always log in debug builds
+        log = true;
+#endif
+
+        if (log) {
+            string logText = $"'{src.FilePath}' line {src.FileLine}: {message}";
+            foreach (var line in logText.AsSpan().EnumerateLines()) {
+                line.ToString().Log(level);
+            }
+        }
+
+        PopupToast.Show($"""
+                         '{Path.GetFileName(src.FilePath)}' line {src.FileLine}:
+                         {message}
+                         """, duration);
     }
 
     /// Create file-system-watchers for all TAS-files used, to detect changes

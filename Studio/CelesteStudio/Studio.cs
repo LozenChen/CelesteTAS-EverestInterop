@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using CelesteStudio.Communication;
 using CelesteStudio.Dialog;
+using CelesteStudio.Dialog.Git;
 using CelesteStudio.Editing;
 using CelesteStudio.Migration;
 using CelesteStudio.Tool;
@@ -29,6 +30,26 @@ public sealed class Studio : Form {
 
     static Studio() {
         Version = $"v{Assembly.GetExecutingAssembly().GetName().Version!.ToString(3)}{VersionSuffix}";
+
+        // Find game directory
+        if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "Celeste.dll"))) {
+            // Windows / Linux
+            CelesteDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..");
+        }
+        else if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Celeste.dll"))) {
+            // macOS (inside .app bundle)
+            CelesteDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..");
+        } else {
+            Console.WriteLine("Couldn't find game directory");
+        }
+
+        // Find install directory
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
+            InstallDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        } else {
+            // Inside .app bundle
+            InstallDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..");
+        }
     }
 
     /// Event which will be called before Studio exits
@@ -38,9 +59,9 @@ public sealed class Studio : Form {
     public readonly Action<Window> WindowCreationCallback;
 
     /// Path to the Celeste install or null if it couldn't be found
-    public static string? CelesteDirectory { get; private set; }
+    public static readonly string? CelesteDirectory;
     /// Path to the Studio install
-    public static string InstallDirectory { get; private set; }
+    public static readonly string InstallDirectory;
 
     /// For some **UNHOLY** reasons, not calling Content.UpdateLayout() in RecalculateLayout() places during startup causes themeing to crash.
     /// _However_, while this hack is active, you can't resize the window, so this has to be disabled again as soon as possible...
@@ -58,12 +79,12 @@ public sealed class Studio : Form {
     private RadelineSimForm? radelineSimForm;
     private ThemeEditor? themeEditorForm;
 
-    private RadelineSimForm.Config radelineFormPersistence = new();
+    private readonly RadelineSimForm.Config radelineFormPersistence = new();
 
     private string TitleBarText => Editor.Document.FilePath == Document.ScratchFile
-        ? $"Studio {Version} - {(Editor.Document.PendingSave ? "*" : string.Empty)}<Scratch>"
+        ? $"Studio {Version} - {(Editor.Document.Dirty ? "*" : string.Empty)}<Scratch>"
         // Hide username inside title bar
-        : $"Studio {Version} - {(Editor.Document.PendingSave ? "*" : string.Empty)}{Editor.Document.FileName}    {Editor.Document.FilePath.Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~")}";
+        : $"Studio {Version} - {(Editor.Document.Dirty ? "*" : string.Empty)}{Editor.Document.FileName}    {Editor.Document.FilePath.Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~")}";
 
     /// Size of scroll bars, depending on the current platform
     public static int ScrollBarSize {
@@ -87,26 +108,6 @@ public sealed class Studio : Form {
         MinimumSize = new Size(250, 250);
 
         WindowCreationCallback = windowCreationCallback;
-
-        // Find game directory
-        if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "Celeste.dll"))) {
-            // Windows / Linux
-            CelesteDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..");
-        }
-        else if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Celeste.dll"))) {
-            // macOS (inside .app bundle)
-            CelesteDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..");
-        } else {
-            Console.WriteLine("Couldn't find game directory");
-        }
-
-        // Find install directory
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
-            InstallDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        } else {
-            // Inside .app bundle
-            InstallDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..");
-        }
 
         // Close other Studio instances to avoid conflicts
         foreach (var process in Process.GetProcesses().Where(process => process.ProcessName is "CelesteStudio" or "CelesteStudio.WPF" or "CelesteStudio.GTK" or "CelesteStudio.Mac" or "Celeste Studio")) {
@@ -162,13 +163,9 @@ public sealed class Studio : Form {
 
         // Needs to be registered before the editor is created
         Settings.Changed += ApplySettings;
-        Settings.KeyBindingsChanged += () => {
-            Menu = CreateMenu();
-        };
+        Settings.KeyBindingsChanged += RefreshMenu;
         // Reflect changed game-settings
-        CommunicationWrapper.SettingsChanged += _ => {
-            Menu = CreateMenu();
-        };
+        CommunicationWrapper.SettingsChanged += _ => RefreshMenu();
 
         // Setup editor
         {
@@ -222,7 +219,7 @@ public sealed class Studio : Form {
 
             // Only enable some settings while connected
             CommunicationWrapper.ConnectionChanged += () => Application.Instance.Invoke(() => {
-                Menu = CreateMenu();
+                RefreshMenu();
             });
         }
 
@@ -357,7 +354,7 @@ public sealed class Studio : Form {
 
     private void ApplySettings() {
         Topmost = Settings.Instance.AlwaysOnTop;
-        Menu = CreateMenu(); // Recreate menu to reflect changes
+        RefreshMenu(); // Recreate menu to reflect changes
     }
 
     protected override void OnClosing(CancelEventArgs e) {
@@ -423,7 +420,7 @@ public sealed class Studio : Form {
         return true;
     }
 
-    private string GetFilePickerDirectory() {
+    public string GetCurrentBaseDirectory() {
         string fallbackDir = string.IsNullOrWhiteSpace(Settings.Instance.LastSaveDirectory)
             ? Path.Combine(CelesteDirectory ?? string.Empty, "TAS Files")
             : Settings.Instance.LastSaveDirectory;
@@ -484,6 +481,7 @@ public sealed class Studio : Form {
     private static readonly ActionBinding SaveFile = new("File_Save", "Save", Binding.Category.File, Hotkey.KeyCtrl(Keys.S), () => Instance.OnSaveFile());
     private static readonly ActionBinding SaveFileAs = new("File_SaveAs", "&Save As...", Binding.Category.File, Hotkey.KeyCtrl(Keys.Shift | Keys.S), () => Instance.OnSaveFileAs(openTargetFile: true));
     private static readonly ActionBinding ShowFile = new("File_Show", "Show in &File Explorer...", Binding.Category.File, Hotkey.None, () => Instance.OnShowFile());
+    private static readonly ActionBinding CloneRepo = new("File_CloneRepo", "&Clone Git Repository...", Binding.Category.File, Hotkey.None, CloneRepositoryDialog.Show);
     private static readonly ActionBinding RecordTAS = new("File_RecordTAS", "&Record TAS...", Binding.Category.File, Hotkey.None, () => Instance.OnRecordTAS());
     private static readonly ActionBinding Quit = new("File_Quit", "Quit", Binding.Category.File, Hotkey.None, () => Application.Instance.Quit());
 
@@ -504,7 +502,7 @@ public sealed class Studio : Form {
     private static readonly BoolBinding ShowFoldingIndicator = CreateSettingToggle("View_ShowFoldingIndicator", "Show Fold Indicators", Binding.Category.View, Hotkey.None, nameof(Settings.ShowFoldIndicators));
 
     public static readonly Binding[] AllBindings = [
-        NewFile, OpenFile, OpenPreviousFile, SaveFile, SaveFileAs, ShowFile, RecordTAS, Quit,
+        NewFile, OpenFile, OpenPreviousFile, SaveFile, SaveFileAs, ShowFile, CloneRepo, RecordTAS, Quit,
         SendInputs,
         ShowGameInfo, ShowSubpixelIndicator, AlwaysOnTop, WrapComments, ShowFoldingIndicator,
     ];
@@ -541,7 +539,7 @@ public sealed class Studio : Form {
         }
 
         Title = TitleBarText;
-        Menu = CreateMenu(); // Recreate menu to reflect changed "Recent Files"
+        RefreshMenu(); // Recreate menu to reflect changed "Recent Files"
 
         CommunicationWrapper.SendPath(Editor.Document.FilePath);
 
@@ -577,7 +575,7 @@ public sealed class Studio : Form {
         OpenFileInEditor(Document.ScratchFile);
     }
 
-    private void OnOpenFile() {
+    public void OnOpenFile(string? baseDirectory = null) {
         if (!ShouldDiscardChanges()) {
             return;
         }
@@ -585,7 +583,7 @@ public sealed class Studio : Form {
         var dialog = new OpenFileDialog {
             Filters = { new FileFilter("TAS", ".tas") },
             MultiSelect = false,
-            Directory = new Uri(GetFilePickerDirectory()),
+            Directory = new Uri(baseDirectory ?? GetCurrentBaseDirectory()),
         };
 
         if (dialog.ShowDialog(this) == DialogResult.Ok) {
@@ -616,7 +614,7 @@ public sealed class Studio : Form {
     private bool OnSaveFileAs(bool openTargetFile) {
         var dialog = new SaveFileDialog {
             Filters = { new FileFilter("TAS", ".tas") },
-            Directory = new Uri(GetFilePickerDirectory()),
+            Directory = new Uri(GetCurrentBaseDirectory()),
         };
 
         if (dialog.ShowDialog(this) != DialogResult.Ok) {
@@ -660,6 +658,9 @@ public sealed class Studio : Form {
     #endregion
     #region Menu
 
+    public void RefreshMenu() {
+        Menu = CreateMenu();
+    }
     private MenuBar CreateMenu() {
         const int minDecimals = 2;
         const int maxDecimals = 12;
@@ -738,6 +739,8 @@ public sealed class Studio : Form {
                 new SeparatorMenuItem(),
                 SaveFile,
                 SaveFileAs,
+                new SeparatorMenuItem(),
+                CloneRepo,
                 new SeparatorMenuItem(),
                 MenuUtils.CreateAction("&Convert to LibTAS Movie..."),
                 new SeparatorMenuItem(),
@@ -848,7 +851,7 @@ public sealed class Studio : Form {
             string versionHistoryPath = Path.Combine(InstallDirectory, "Assets", "version_history.json");
             if (File.Exists(versionHistoryPath)) {
                 using var fs = File.OpenRead(versionHistoryPath);
-                ChangelogDialog.Show(fs, null, null);
+                ChangelogDialog.Show(fs, null, null, forceShow: false);
             }
         });
         whatsNewItem.Enabled = File.Exists(Path.Combine(InstallDirectory, "Assets", "version_history.json"));
@@ -931,7 +934,7 @@ public sealed class Studio : Form {
     private void OnIntegrateReadFiles() {
         var dialog = new SaveFileDialog {
             Filters = { new FileFilter("TAS", ".tas") },
-            Directory = new Uri(GetFilePickerDirectory()),
+            Directory = new Uri(GetCurrentBaseDirectory()),
             FileName = Path.GetDirectoryName(Editor.Document.FilePath) + "/" + Path.GetFileNameWithoutExtension(Editor.Document.FilePath) + "_Integrated.tas"
         };
         Console.WriteLine($"f {Editor.Document.FilePath} & {Path.GetDirectoryName(Editor.Document.FilePath) + Path.GetFileNameWithoutExtension(Editor.Document.FilePath) + "_Integrated.tas"}");

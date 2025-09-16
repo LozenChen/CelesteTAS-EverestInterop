@@ -123,8 +123,8 @@ public class Document : IDisposable {
     public string Text => FormatLinesToText(CurrentLines);
 
     /// Whether the document is still waiting on the text being saved to disk
-    public bool PendingSave => dirty || saveWaitTimeOut != null;
-    private bool dirty;
+    public bool PendingSave => Dirty || saveWaitTimeOut != null;
+    public bool Dirty { get; private set; }
 
     // Ignore file-watcher events for 10ms after saving, to avoid triggering ourselves
     // This is probably way higher than it needs to be, to avoid potential issues with slow drives
@@ -147,13 +147,25 @@ public class Document : IDisposable {
 
     /// Reports insertions and deletions of the document
     public event Action<Document, Dictionary<int, string>, Dictionary<int, string>>? TextChanged;
-    private void OnTextChanged(Dictionary<int, string> insertions, Dictionary<int, string> deletions)
-        => TextChanged?.Invoke(this, insertions, deletions);
+    private void OnTextChanged(Dictionary<int, string> insertions, Dictionary<int, string> deletions) {
+        // Avoid having a fully empty document
+        if (CurrentLines.Count == 0) {
+            CurrentLines.Add(string.Empty);
+        }
+
+        TextChanged?.Invoke(this, insertions, deletions);
+    }
 
     /// Allows the editor to fix invalid syntax in a patch-series before it is ever saved
     public event Func<Document, Dictionary<int, string>, Dictionary<int, string>, Patch?>? FixupPatch;
-    private Patch? OnFixupPatch(Dictionary<int, string> insertions, Dictionary<int, string> deletions)
-        => FixupPatch?.Invoke(this, insertions, deletions);
+    private Patch? OnFixupPatch(Dictionary<int, string> insertions, Dictionary<int, string> deletions) {
+        // Avoid having a fully empty document
+        if (CurrentLines.Count == 0) {
+            CurrentLines.Add(string.Empty);
+        }
+
+        return FixupPatch?.Invoke(this, insertions, deletions);
+    }
 
     /// Formats lines of a file into a single string, using consistent formatting rules
     public static string FormatLinesToText(IEnumerable<string> lines) {
@@ -241,7 +253,7 @@ public class Document : IDisposable {
                     try {
                         lastFileSave = DateTime.UtcNow;
                         await File.WriteAllTextAsync(FilePath, text);
-                        dirty = false;
+                        Dirty = false;
 
                         if (Settings.Instance.AutoBackupEnabled && !string.IsNullOrWhiteSpace(FilePath)) {
                             CreateBackup();
@@ -529,7 +541,7 @@ public class Document : IDisposable {
                 if (Settings.Instance.AutoSave) {
                     Document.Save();
                 } else {
-                    Document.dirty = true;
+                    Document.Dirty = true;
                     Application.Instance.AsyncInvoke(Studio.Instance.RefreshTitle);
                 }
             } else {
@@ -772,7 +784,7 @@ public class Document : IDisposable {
         if (Settings.Instance.AutoSave) {
             Save();
         } else {
-            dirty = true;
+            Dirty = true;
             Application.Instance.AsyncInvoke(Studio.Instance.RefreshTitle);
         }
     }
@@ -801,7 +813,7 @@ public class Document : IDisposable {
         if (Settings.Instance.AutoSave) {
             Save();
         } else {
-            dirty = true;
+            Dirty = true;
             Application.Instance.AsyncInvoke(Studio.Instance.RefreshTitle);
         }
     }

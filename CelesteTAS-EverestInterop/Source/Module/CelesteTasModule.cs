@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using Celeste;
 using Celeste.Mod;
 using FMOD.Studio;
 using JetBrains.Annotations;
+using StudioCommunication;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -59,6 +60,11 @@ public class CelesteTasModule : EverestModule {
         }
 #endif
 
+        // Restore back to default value
+        if (TasSettings.ForceAllowAccessibilityTools == StudioEnableCondition.ForCurrentSession) {
+            TasSettings.ForceAllowAccessibilityTools = StudioEnableCondition.WhileStudioConnected;
+        }
+
         AttributeUtils.Invoke<LoadAttribute>();
 
 #if DEBUG
@@ -71,7 +77,7 @@ public class CelesteTasModule : EverestModule {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
                 IncludeSubdirectories = true
             };
-            watcher.Changed += (s, e) => {
+            watcher.Changed += (_, e) => {
                 try {
                     if (Everest.Content.Mods.FirstOrDefault(mod => mod.Mod == Metadata) is not FileSystemModContent tasContent) {
                         return;
@@ -157,6 +163,11 @@ public class CelesteTasModule : EverestModule {
                 } else {
                     "Expected file path after --sync-check-result CLI argument".Log(LogLevel.Error);
                 }
+                return true;
+            }
+
+            case "--validate-room-labels": {
+                SyncChecker.ValidateRoomLabels = true;
                 return true;
             }
 

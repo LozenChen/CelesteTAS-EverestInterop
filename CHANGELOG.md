@@ -1,3 +1,72 @@
+# CelesteTAS v3.46.2, Studio v3.9.7
+
+## Repository Cloning
+
+You can now easily clone Git repositories directly from Studio!
+Simply goto `File -> Clone Git Repository...` and enter the appropriate URL and target directory.
+
+This has the advantage of always cloning the respective submodules as well, unlike GitHub's "Download .zip" option.
+
+--- 
+
+- Feature: Utility to clone Git repositories from Studio
+- Fix: Commands like `Set,Player.Speed.X,300` not working (any `Set` command referencing value types in value types)
+- Fix: Exception when setting element of collection with `[]` indexing syntax
+- Fix: Disable hotkey inputs in modded binding GUIs
+- Fix: Trim room labels before validating
+- Fix: Incorrectly rendering various SkinModHelper+ features on skin
+
+# CelesteTAS v3.46.1, Studio v3.9.6
+
+- Feature: Ignore breakpoints inside files accessed with `Read` commands
+- Feature: Add `*` spread operator to target-queries, to flatten out collections (e.g. `Set,Player.ChaserStates*.TimeStamp,0`)
+- Feature: Add `[]` index operator to access individual elements of collections (e.g. `Get,Player.Sprite.animations[idle].Delay`)
+- Feature: Allow specifying custom file name for `StartRecording,FileName`
+- Tweak: Adjust wording / duration of auto-pause toast message
+- Fix: Avali SkinMod not working with "Prevent Skin-Mod Gameplay Changes" option
+- Fix: Changes in breakpoint playback speed not immediately being respected
+- Fix: RNG seeding being applied outside of TAS
+- Fix: Not being able to set statemachine states with names (e.g. `Set,Player.StateMachine.State,Player.StNormal`)
+- Fix: Auto-complete with `Invoke` commands not being avaiable when mods have unloaded optional dependencies
+- Fix: "Game Settings" menu in Studio not reflecting changes to numeric inputs
+- Fix: Apply correct theme for changelog popup dialog
+
+# CelesteTAS v3.46.0, Studio v3.9.5
+
+## Universal RNG Seeding
+
+Even though most things in Celeste are deterministic, some are not!  
+To solve this issue, CelesteTAS now changes all randomness to have deterministic behavior.
+
+Additionally, all (technically) undeterministic randomness can now be seeded with the `SeedRandom,[Target],[Seed]` command.  
+You can refer to [the wiki page](https://github.com/EverestAPI/CelesteTAS-EverestInterop/wiki/Randomness) to read about all supported cases and the ethics surrounding them.
+
+**Please report any remaining cases of undeterministic behaviour or randomness!**  
+That also includes deterministic behavior which breaks with seemingly unrelated changes.
+
+---
+
+- Feature: Consistent behaviour of randomness when running a TAS
+- Feature: Universal RNG seeding system with `SeedRandom` command
+- Fix: Maintain correct `Calc.Random` state while fast-forwarding
+- Fix: Dust sprites not being created while fast-forwarding
+
+# CelesteTAS v3.45.4, Studio v3.9.5
+
+- Feature: Allow force-enabling accessibility tools only after doing a casual playthrough
+- Tweak: Better communicate warnings / risks about force-enabling accessibility tools in options
+
+# CelesteTAS v3.45.3, Studio v3.9.5
+
+- Feature: Allow force-enabling accessibility tools only for current session
+- Feature: Add `--validate-room-labels` CLI option to promote room label validation from a warning to an error
+- Fix: Crash when removing last line in Studio
+- Fix: `Project File Formatter` tool not working correctly for some cased on Windows
+- Fix: Studio requiring the user to manually install .NET 8 on Linux
+- Tweak: Hide in-game popup messages while recording with TAS Recorder
+- Tweak: Require each changelog page to be viewed for at least 1 second, to avoid users skipping over them
+- Tweak: Avoid showing "Unsaved Changes" indicator when using `Auto Save File`
+
 # CelesteTAS v3.45.2, Studio v3.9.4
 
 - Feature: Automatically fill-in intro animation and first room label for new files if possible
